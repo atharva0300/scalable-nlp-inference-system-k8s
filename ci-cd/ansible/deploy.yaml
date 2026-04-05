@@ -1,0 +1,12 @@
+- name: Deploy NLP System to Kubernetes
+  hosts: localhost
+  tasks:
+
+    - name: Apply Kubernetes Deployments
+      command: kubectl apply -f ../../k8s/deployments/
+
+    - name: Apply Kubernetes Services
+      command: kubectl apply -f ../../k8s/services/
+
+    - name: Apply HPA
+      command: kubectl apply -f ../../k8s/hpa/

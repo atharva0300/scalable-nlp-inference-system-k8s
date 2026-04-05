@@ -1,0 +1,21 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'docker build -t distilbert-service ./services/distilbert'
+            }
+        }
+        stage('Push') {
+            steps {
+                sh 'docker push <your-dockerhub>/distilbert-service'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh 'kubectl apply -f k8s/'
+            }
+        }
+    }
+}
