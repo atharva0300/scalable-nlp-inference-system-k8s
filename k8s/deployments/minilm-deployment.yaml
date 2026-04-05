@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minilm-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minilm
+  template:
+    metadata:
+      labels:
+        app: minilm
+    spec:
+      containers:
+      - name: minilm
+        image: <your-dockerhub>/minilm-service:latest
+        ports:
+        - containerPort: 8000

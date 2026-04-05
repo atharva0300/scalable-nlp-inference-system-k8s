@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: distilbert-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: distilbert
+  template:
+    metadata:
+      labels:
+        app: distilbert
+    spec:
+      containers:
+      - name: distilbert
+        image: <your-dockerhub>/distilbert-service:latest
+        ports:
+        - containerPort: 8000

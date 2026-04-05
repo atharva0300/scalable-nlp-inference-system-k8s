@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bert-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bert
+  template:
+    metadata:
+      labels:
+        app: bert
+    spec:
+      containers:
+      - name: bert
+        image: <your-dockerhub>/bert-service:latest
+        ports:
+        - containerPort: 8000
