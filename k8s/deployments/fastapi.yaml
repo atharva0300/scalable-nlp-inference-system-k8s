@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-router
+  labels:
+    app: fastapi-router
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastapi-router
+  template:
+    metadata:
+      labels:
+        app: fastapi-router
+    spec:
+      containers:
+      - name: fastapi-router
+        image: my-fastapi-router:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: HIGH_LOAD_THRESHOLD
+          value: "10"
+        - name: MEDIUM_LOAD_THRESHOLD
+          value: "3"
+        - name: MISTRAL_URL
+          value: "http://ollama-tinyllama:11434/api/generate"
+        - name: PHI3_URL
+          value: "http://ollama-tinyllama:11434/api/generate"
+        - name: TINYLLAMA_URL
+          value: "http://ollama-tinyllama:11434/api/generate"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-service
+spec:
+  selector:
+    app: fastapi-router
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

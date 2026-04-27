@@ -1,0 +1,42 @@
+# TinyLlama Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-tinyllama
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ollama-tinyllama
+  template:
+    metadata:
+      labels:
+        app: ollama-tinyllama
+    spec:
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c", "ollama serve & sleep 15 && ollama pull tinyllama && wait"]
+        ports:
+        - containerPort: 11434
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-tinyllama
+spec:
+  selector:
+    app: ollama-tinyllama
+  ports:
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+
