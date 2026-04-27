@@ -1,20 +1,49 @@
 pipeline {
     agent any
 
+    environment {
+        DOCKER_REGISTRY = 'custom-registry'
+        IMAGE_NAME = 'fastapi-router'
+        IMAGE_TAG = "${env.BUILD_ID}"
+    }
+
     stages {
-        stage('Build') {
+        stage('Checkout') {
             steps {
-                sh 'docker build -t distilbert-service ./services/distilbert'
+                checkout scm
             }
         }
-        stage('Push') {
+
+        stage('Build & Test FastAPI Router') {
             steps {
-                sh 'docker push <your-dockerhub>/distilbert-service'
+                dir('gateway/fastapi') {
+                    sh 'docker build -t ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .'
+                    // In a real pipeline, you would run pytest here
+                    // sh 'docker run --rm ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} pytest'
+                }
             }
         }
-        stage('Deploy') {
+
+        stage('Push Image') {
             steps {
-                sh 'kubectl apply -f k8s/'
+                sh 'docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}'
+                sh 'docker tag ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest'
+                sh 'docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest'
+            }
+        }
+
+        stage('Deploy to K8s') {
+            steps {
+                dir('k8s/deployments') {
+                    // Update image tag in deployment and apply
+                    sh 'sed -i "s|image: custom-registry/fastapi-router:latest|image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}|g" fastapi.yaml'
+                    sh 'kubectl apply -f fastapi.yaml'
+                    sh 'kubectl apply -f ollama-models.yaml'
+                    sh 'kubectl apply -f nginx-gateway.yaml'
+                }
+                dir('k8s/hpa') {
+                    sh 'kubectl apply -f hpa.yaml'
+                }
             }
         }
     }
