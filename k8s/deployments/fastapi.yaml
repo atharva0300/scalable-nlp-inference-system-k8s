@@ -21,16 +21,14 @@ spec:
         ports:
         - containerPort: 8000
         env:
-        - name: HIGH_LOAD_THRESHOLD
-          value: "10"
-        - name: MEDIUM_LOAD_THRESHOLD
-          value: "3"
-        - name: MISTRAL_URL
-          value: "http://ollama-mistral:11434/api/generate"
-        - name: PHI3_URL
-          value: "http://ollama-phi3:11434/api/generate"
-        - name: TINYLLAMA_URL
-          value: "http://ollama-tinyllama:11434/api/generate"
+        - name: DISTILBERT_URL
+          value: "http://nlp-distilbert-service:8001/infer"
+        - name: BERT_URL
+          value: "http://nlp-bert-service:8001/infer"
+        - name: ROBERTA_URL
+          value: "http://nlp-roberta-service:8001/infer"
+        - name: DEBERTA_URL
+          value: "http://nlp-deberta-service:8001/infer"
         resources:
           requests:
             cpu: "200m"

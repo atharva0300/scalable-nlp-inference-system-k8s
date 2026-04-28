@@ -1,14 +1,34 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: tinyllama-hpa
+  name: distilbert-hpa
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: ollama-tinyllama
-  minReplicas: 4
+    name: nlp-distilbert
+  minReplicas: 3
   maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bert-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nlp-bert
+  minReplicas: 2
+  maxReplicas: 4
   metrics:
   - type: Resource
     resource:
@@ -21,12 +41,12 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: phi3-hpa
+  name: roberta-hpa
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: ollama-phi3
+    name: nlp-roberta
   minReplicas: 2
   maxReplicas: 4
   metrics:
@@ -41,12 +61,12 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: mistral-hpa
+  name: deberta-hpa
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: ollama-mistral
+    name: nlp-deberta
   minReplicas: 1
   maxReplicas: 2
   metrics:
@@ -55,4 +75,4 @@ spec:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 85
+        averageUtilization: 80
