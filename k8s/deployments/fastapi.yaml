@@ -26,9 +26,9 @@ spec:
         - name: MEDIUM_LOAD_THRESHOLD
           value: "3"
         - name: MISTRAL_URL
-          value: "http://ollama-tinyllama:11434/api/generate"
+          value: "http://ollama-mistral:11434/api/generate"
         - name: PHI3_URL
-          value: "http://ollama-tinyllama:11434/api/generate"
+          value: "http://ollama-phi3:11434/api/generate"
         - name: TINYLLAMA_URL
           value: "http://ollama-tinyllama:11434/api/generate"
         resources:

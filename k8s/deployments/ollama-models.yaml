@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: ollama-tinyllama
 spec:
-  replicas: 2
+  replicas: 4
   selector:
     matchLabels:
       app: ollama-tinyllama
@@ -47,3 +47,102 @@ spec:
       port: 11434
       targetPort: 11434
 
+---
+# Phi3 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-phi3
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ollama-phi3
+  template:
+    metadata:
+      labels:
+        app: ollama-phi3
+    spec:
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        imagePullPolicy: IfNotPresent
+        command: ["ollama", "serve"]
+        ports:
+        - containerPort: 11434
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+        volumeMounts:
+        - name: model-store
+          mountPath: /root/.ollama
+      volumes:
+      - name: model-store
+        persistentVolumeClaim:
+          claimName: ollama-model-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-phi3
+spec:
+  selector:
+    app: ollama-phi3
+  ports:
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+
+---
+# Mistral Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-mistral
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama-mistral
+  template:
+    metadata:
+      labels:
+        app: ollama-mistral
+    spec:
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        imagePullPolicy: IfNotPresent
+        command: ["ollama", "serve"]
+        ports:
+        - containerPort: 11434
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+        volumeMounts:
+        - name: model-store
+          mountPath: /root/.ollama
+      volumes:
+      - name: model-store
+        persistentVolumeClaim:
+          claimName: ollama-model-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-mistral
+spec:
+  selector:
+    app: ollama-mistral
+  ports:
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434

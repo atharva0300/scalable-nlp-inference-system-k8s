@@ -27,8 +27,8 @@ st.markdown("Single pane interface for testing adaptive inference routing and an
 with st.expander("🛠️ Load Spike & System Controls", expanded=True):
     col1, col2 = st.columns([3, 1])
     with col1:
-        spike_prompt = st.text_input("Batch Prompt:", "Explain systems performance engineering in one word.")
-        concurrent_reqs = st.slider("Concurrent Requests:", min_value=1, max_value=500, value=15)
+        spike_prompt = st.text_input("Batch Prompt:", "Who is the best cricketer in the world?")
+        concurrent_reqs = st.slider("Concurrent Requests:", min_value=1, max_value=500, value=65)
     with col2:
         st.write("")
         st.write("")
@@ -90,13 +90,13 @@ if launch_spike:
                 res = session.post(API_URL, json={"prompt": spike_prompt}, timeout=300)
                 res.raise_for_status()
                 data = res.json()
-                return {"id": idx+1, "model": data.get("model_used"), "latency": data.get("latency_sec"), "response": data.get("response", ""), "success": True}
+                return {"id": idx+1, "model": data.get("model_used"), "latency": data.get("latency_sec"), "queue_wait_sec": data.get("queue_wait_sec", 0), "response": data.get("response", ""), "success": True}
             except Exception as e:
-                return {"id": idx+1, "model": "error", "latency": time.time() - start, "response": f"Error: {str(e)}", "success": False}
+                return {"id": idx+1, "model": "error", "latency": time.time() - start, "queue_wait_sec": 0, "response": f"Error: {str(e)}", "success": False}
 
         results = []
         with st.spinner(f"Processing {concurrent_reqs} requests..."):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_reqs) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                 results = list(executor.map(send_request, range(concurrent_reqs)))
         
         df = pd.DataFrame(results)
@@ -150,11 +150,12 @@ if prompt := st.chat_input("Send a single request..."):
             
             model = data.get("model_used", "unknown")
             latency = data.get("latency_sec", 0)
+            q_wait = data.get("queue_wait_sec", 0)
             resp = data.get("response", "")
             
             k8s_out = get_k8s_stats()
             
-            output = f"**Routed to:** `{model}` (Latency: {latency}s)\n\n**Response:**\n{resp}"
+            output = f"**Routed to:** `{model}` (Latency: {latency}s | Queue Wait: {q_wait}s)\n\n**Response:**\n{resp}"
             message_placeholder.markdown(output)
             st.markdown("### Backend Kubernetes Telemetry")
             st.markdown(f"<div class='k8s-box'>{k8s_out}</div>", unsafe_allow_html=True)

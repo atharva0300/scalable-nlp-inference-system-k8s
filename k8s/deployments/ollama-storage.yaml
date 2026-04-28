@@ -21,7 +21,7 @@ spec:
         image: ollama/ollama:latest
         command: ["/bin/sh", "-c"]
         args:
-        - "ollama serve & sleep 5 && ollama pull tinyllama && ollama pull phi3 && kill $!"
+        - "ollama serve & sleep 5 && ollama pull tinyllama && ollama pull phi3 && ollama pull mistral && kill $!"
         volumeMounts:
         - name: model-store
           mountPath: /root/.ollama

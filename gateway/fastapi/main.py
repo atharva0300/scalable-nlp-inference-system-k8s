@@ -34,20 +34,16 @@ MODELS = {
 HIGH_LOAD_THRESHOLD = int(os.getenv("HIGH_LOAD_THRESHOLD", "10"))
 MEDIUM_LOAD_THRESHOLD = int(os.getenv("MEDIUM_LOAD_THRESHOLD", "3"))
 
-async def route_request(prompt: str):
+async def route_request(prompt: str) -> str:
+    # SPE PATTERN: Adaptive Load Balancing
     active_reqs = QUEUE_LENGTH._value.get()
     
-    if active_reqs >= HIGH_LOAD_THRESHOLD:
-        target_model = "tinyllama"
-        logger.info("High load detected. Routing to TinyLlama.")
-    elif active_reqs >= MEDIUM_LOAD_THRESHOLD:
-        target_model = "phi3"
-        logger.info("Medium load detected. Routing to Phi-3 Mini.")
+    if active_reqs > 10:
+        return "tinyllama"
+    elif active_reqs >= 5:
+        return "phi3"
     else:
-        target_model = "phi3"
-        logger.info("Low load. Routing to Phi-3 Mini.")
-        
-    return target_model
+        return "mistral"
 
 # Global HTTP Client to reuse connections and prevent exhaustion
 http_client = None
@@ -75,70 +71,81 @@ async def generate_text(request: Request):
     QUEUE_LENGTH.inc()
     start_time = time.time()
     
-    target_model = await route_request(prompt)
-    target_url = MODELS[target_model]
+LLM_SEMAPHORE = asyncio.Semaphore(6)
+
+@app.post("/generate")
+async def generate_text(request: Request):
+    data = await request.json()
+    prompt = data.get("prompt", "")
     
-    cache_key = prompt # Cache strictly by prompt to prevent multi-model thrashing
+    QUEUE_LENGTH.inc()
+    start_time = time.time()
     
-    try:
-        # Request Coalescing & Caching (SPE Optimization)
-        if cache_key not in CACHE_LOCKS:
-            CACHE_LOCKS[cache_key] = asyncio.Lock()
-            
-        async with CACHE_LOCKS[cache_key]:
-            if cache_key in CACHE:
-                await asyncio.sleep(0.01) # Simulate cache fetch
-                result = CACHE[cache_key]
-                is_cached = True
-                # Use the model that actually generated the cached response
-                target_model = result.get("model", target_model)
-            else:
-                payload = {
-                    "model": target_model, 
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 5 # Drastically cap tokens to guarantee sub-30s inference
-                    }
-                }
-                response = await http_client.post(target_url, json=payload)
-                response.raise_for_status()
-                result = response.json()
-                result["model"] = target_model
-                CACHE[cache_key] = result
-                is_cached = False
+    # SPE PATTERN: Queue wait time tracking
+    queue_enter_time = time.time()
+    
+    async with LLM_SEMAPHORE:
+        queue_wait_sec = time.time() - queue_enter_time
         
-        latency = time.time() - start_time
-        LATENCY.labels(model=target_model).observe(latency)
-        REQUEST_COUNT.labels(model=target_model).inc()
+        target_model = await route_request(prompt)
+        target_url = MODELS[target_model]
         
-        # Log for ELK
-        log_payload = {
-            "event": "inference",
-            "model": target_model,
-            "latency_sec": latency,
-            "queue_length_at_request": QUEUE_LENGTH._value.get(),
-            "cache_hit": is_cached
+        # Determine exact model constraints
+        constrained_prompt = f"Answer in one short sentence only: {prompt}"
+        
+        payload = {
+            "model": target_model, 
+            "prompt": constrained_prompt,
+            "stream": False,
+            "options": {
+                "num_predict": 8,
+                "temperature": 0.1,
+                "top_p": 0.3
+            }
         }
-        logger.info(json.dumps(log_payload))
         
-        # Send to Logstash asynchronously to avoid blocking inference
         try:
-            asyncio.create_task(http_client.post("http://logstash-service:5000", json=log_payload))
+            response = await http_client.post(target_url, json=payload)
+            response.raise_for_status()
+            result = response.json()
         except Exception as e:
-            pass # Ignore logstash errors so it doesn't break inference
-        
-        return {
-            "model_used": target_model,
-            "latency_sec": round(latency, 2),
-            "response": result.get("response", "")
-        }
-        
+            QUEUE_LENGTH.dec()
+            logger.error(f"Error calling {target_model}: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    QUEUE_LENGTH.dec()
+    
+    latency = time.time() - start_time
+    LATENCY.labels(model=target_model).observe(latency)
+    REQUEST_COUNT.labels(model=target_model).inc()
+    
+    # Log for ELK (Upgraded fields per user request)
+    log_payload = {
+        "event": "inference",
+        "model": target_model,
+        "latency_sec": round(latency, 3),
+        "queue_length_at_request": QUEUE_LENGTH._value.get(),
+        "queue_wait_sec": round(queue_wait_sec, 3),
+        "active_requests": 6 - LLM_SEMAPHORE._value,
+        "success": True,
+        "request_id": str(time.time()),
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+    logger.info(json.dumps(log_payload))
+    
+    # Send to Logstash synchronously to ensure Kibana receives it before request ends
+    try:
+        await http_client.post("http://logstash-service:5000", json=log_payload, timeout=2.0)
     except Exception as e:
-        logger.error(f"Error calling {target_model}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        QUEUE_LENGTH.dec()
+        pass # Ignore logstash errors so it doesn't break inference
+    
+    return {
+        "model_used": target_model,
+        "latency_sec": round(latency, 2),
+        "queue_wait_sec": round(queue_wait_sec, 2),
+        "response": result.get("response", "")
+    }
+
 
 @app.get("/metrics")
 def get_metrics():
