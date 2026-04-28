@@ -22,8 +22,10 @@ data:
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 
-                # Rate limiting for SPE (optional addition)
-                # limit_req zone=mylimit burst=20 nodelay;
+                # SPE Optimizations: High timeouts for heavy concurrent load
+                proxy_read_timeout 300s;
+                proxy_connect_timeout 300s;
+                proxy_send_timeout 300s;
             }
         }
     }

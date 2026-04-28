@@ -17,7 +17,7 @@ spec:
       - name: ollama
         image: ollama/ollama:latest
         imagePullPolicy: IfNotPresent
-        command: ["/bin/sh", "-c", "ollama serve & sleep 15 && ollama pull tinyllama && wait"]
+        command: ["ollama", "serve"]
         ports:
         - containerPort: 11434
         resources:
@@ -27,6 +27,13 @@ spec:
           limits:
             cpu: "2000m"
             memory: "2Gi"
+        volumeMounts:
+        - name: model-store
+          mountPath: /root/.ollama
+      volumes:
+      - name: model-store
+        persistentVolumeClaim:
+          claimName: ollama-model-store
 ---
 apiVersion: v1
 kind: Service
