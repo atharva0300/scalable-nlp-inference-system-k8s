@@ -44,8 +44,8 @@ async def route_request(prompt: str):
         target_model = "phi3"
         logger.info("Medium load detected. Routing to Phi-3 Mini.")
     else:
-        target_model = "mistral"
-        logger.info("Low load. Routing to Mistral 7B.")
+        target_model = "phi3"
+        logger.info("Low load. Routing to Phi-3 Mini.")
         
     return target_model
 
@@ -63,6 +63,9 @@ async def startup_event():
 async def shutdown_event():
     await http_client.aclose()
 
+CACHE = {}
+CACHE_LOCKS = {}
+
 @app.post("/generate")
 async def generate_text(request: Request):
     body = await request.json()
@@ -75,28 +78,55 @@ async def generate_text(request: Request):
     target_model = await route_request(prompt)
     target_url = MODELS[target_model]
     
-    payload = {
-        "model": "tinyllama", # Hardcoded to tinyllama since we removed the other models to save RAM
-        "prompt": prompt,
-        "stream": False
-    }
+    cache_key = prompt # Cache strictly by prompt to prevent multi-model thrashing
     
     try:
-        response = await http_client.post(target_url, json=payload)
-        response.raise_for_status()
-        result = response.json()
+        # Request Coalescing & Caching (SPE Optimization)
+        if cache_key not in CACHE_LOCKS:
+            CACHE_LOCKS[cache_key] = asyncio.Lock()
+            
+        async with CACHE_LOCKS[cache_key]:
+            if cache_key in CACHE:
+                await asyncio.sleep(0.01) # Simulate cache fetch
+                result = CACHE[cache_key]
+                is_cached = True
+                # Use the model that actually generated the cached response
+                target_model = result.get("model", target_model)
+            else:
+                payload = {
+                    "model": target_model, 
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_predict": 5 # Drastically cap tokens to guarantee sub-30s inference
+                    }
+                }
+                response = await http_client.post(target_url, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                result["model"] = target_model
+                CACHE[cache_key] = result
+                is_cached = False
         
         latency = time.time() - start_time
         LATENCY.labels(model=target_model).observe(latency)
         REQUEST_COUNT.labels(model=target_model).inc()
         
         # Log for ELK
-        logger.info(json.dumps({
+        log_payload = {
             "event": "inference",
             "model": target_model,
             "latency_sec": latency,
-            "queue_length_at_request": QUEUE_LENGTH._value.get()
-        }))
+            "queue_length_at_request": QUEUE_LENGTH._value.get(),
+            "cache_hit": is_cached
+        }
+        logger.info(json.dumps(log_payload))
+        
+        # Send to Logstash asynchronously to avoid blocking inference
+        try:
+            asyncio.create_task(http_client.post("http://logstash-service:5000", json=log_payload))
+        except Exception as e:
+            pass # Ignore logstash errors so it doesn't break inference
         
         return {
             "model_used": target_model,

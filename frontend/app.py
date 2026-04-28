@@ -28,7 +28,7 @@ with st.expander("🛠️ Load Spike & System Controls", expanded=True):
     col1, col2 = st.columns([3, 1])
     with col1:
         spike_prompt = st.text_input("Batch Prompt:", "Explain systems performance engineering in one word.")
-        concurrent_reqs = st.slider("Concurrent Requests:", min_value=1, max_value=100, value=15)
+        concurrent_reqs = st.slider("Concurrent Requests:", min_value=1, max_value=500, value=15)
     with col2:
         st.write("")
         st.write("")
@@ -39,10 +39,13 @@ with st.expander("🛠️ Load Spike & System Controls", expanded=True):
 
 def get_k8s_stats():
     try:
-        pods = subprocess.getoutput("kubectl get pods -o wide")
-        hpa = subprocess.getoutput("kubectl get hpa")
-        top = subprocess.getoutput("kubectl top pods --request-timeout=3s 2>/dev/null || echo 'Metrics server not ready or no data'")
-        return f"--- PODS STATUS ---\n{pods}\n\n--- HORIZONTAL POD AUTOSCALERS ---\n{hpa}\n\n--- POD RESOURCE USAGE (CPU/Memory) ---\n{top}"
+        pods = subprocess.run(["kubectl", "get", "pods", "-o", "wide"], capture_output=True, text=True).stdout
+        hpa = subprocess.run(["kubectl", "get", "hpa"], capture_output=True, text=True).stdout
+        
+        top_res = subprocess.run(["kubectl", "top", "pods", "--request-timeout=3s"], capture_output=True, text=True)
+        top = top_res.stdout if top_res.returncode == 0 else "Metrics server not ready or no data"
+        
+        return f"--- PODS STATUS ---\n{pods}\n--- HORIZONTAL POD AUTOSCALERS ---\n{hpa}\n--- POD RESOURCE USAGE (CPU/Memory) ---\n{top}"
     except Exception as e:
         return f"Error fetching k8s stats: {str(e)}"
 
@@ -76,10 +79,15 @@ if launch_spike:
     with st.chat_message("assistant"):
         st.write("⏳ Pumping traffic to the gateway...")
         
+        # Setup session for 500 connections to avoid Windows connection resets
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=500, pool_maxsize=500, max_retries=3)
+        session.mount('http://', adapter)
+        
         def send_request(idx):
             start = time.time()
             try:
-                res = requests.post(API_URL, json={"prompt": spike_prompt}, timeout=300)
+                res = session.post(API_URL, json={"prompt": spike_prompt}, timeout=300)
                 res.raise_for_status()
                 data = res.json()
                 return {"id": idx+1, "model": data.get("model_used"), "latency": data.get("latency_sec"), "response": data.get("response", ""), "success": True}
@@ -130,8 +138,13 @@ if prompt := st.chat_input("Send a single request..."):
         message_placeholder.markdown("⏳ *Routing request...*")
         
         try:
+            # Setup session to prevent Windows socket drops on slow CPU inference
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=3)
+            session.mount('http://', adapter)
+            
             start_t = time.time()
-            res = requests.post(API_URL, json={"prompt": prompt}, timeout=300)
+            res = session.post(API_URL, json={"prompt": prompt}, timeout=300)
             res.raise_for_status()
             data = res.json()
             
