@@ -73,6 +73,31 @@ To ensure a seamless setup, we have modularized the documentation. Please follow
 
 ---
 
+## Environment and Dependency Versions
+
+The project was developed and tested using the following software versions.
+
+| Component | Version |
+|---|---|
+| Python | 3.11 |
+| Docker Desktop | 28.x |
+| Minikube | v1.35+ |
+| Kubernetes (kubectl) | v1.32+ |
+| Helm | v3.17+ |
+| Streamlit | 1.45+ |
+| FastAPI | 0.115+ |
+| Transformers | 4.51+ |
+| PyTorch | 2.7+ |
+| Grafana | 11.x |
+| Loki | 3.x |
+| Promtail | 3.x |
+| Jenkins | 2.x |
+| Ansible | 11.x |
+| k6 | 1.0+ |
+
+> Note: Minor version differences may still work, but the above versions were used during development, benchmarking, and experimentation.
+
+
 ## 📊 Benchmarking & Autoscaling Results
 
 ### Static vs Adaptive Routing Comparison
