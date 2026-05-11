@@ -1,171 +1,185 @@
 import streamlit as st
-import requests
-import time
+import asyncio
+import httpx
 import pandas as pd
-import plotly.express as px
-import concurrent.futures
+import time
+import json
 import subprocess
 
-API_URL = "http://localhost:30080/generate"
+st.set_page_config(page_title="Latency-Aware Load Balancer", layout="wide")
 
-st.set_page_config(page_title="SPE Load Tester", page_icon="☸️", layout="wide")
+BASE_URL = "http://127.0.0.1:8000"
 
-st.markdown("""
-<style>
-    .k8s-box { background-color: #1e1e1e; color: #00ff00; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.85em; overflow-x: auto; white-space: pre-wrap; }
-    .stChatInput { padding-bottom: 20px; }
-</style>
-""", unsafe_allow_html=True)
+st.title("Distributed Toxicity Inference Platform")
+st.subheader("Adaptive Latency-Aware Routing Architecture")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-st.title("☸️ SPE Load Tester & Kubernetes Analyzer")
-st.markdown("Single pane interface for testing adaptive inference routing and analyzing backend Kubernetes auto-scaling behavior.")
-
-# --- CONTROLS ---
-with st.expander("🛠️ Load Spike & System Controls", expanded=True):
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        spike_prompt = st.text_input("Batch Prompt:", "Who is the best cricketer in the world?")
-        concurrent_reqs = st.slider("Concurrent Requests:", min_value=1, max_value=500, value=65)
-    with col2:
-        st.write("")
-        st.write("")
-        launch_spike = st.button("🔥 Launch Load Spike", use_container_width=True)
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
-
-def get_k8s_stats():
+def kubectl(cmd):
     try:
-        pods = subprocess.run(["kubectl", "get", "pods", "-o", "wide"], capture_output=True, text=True).stdout
-        hpa = subprocess.run(["kubectl", "get", "hpa"], capture_output=True, text=True).stdout
-        
-        top_res = subprocess.run(["kubectl", "top", "pods", "--request-timeout=3s"], capture_output=True, text=True)
-        top = top_res.stdout if top_res.returncode == 0 else "Metrics server not ready or no data"
-        
-        return f"--- PODS STATUS ---\n{pods}\n--- HORIZONTAL POD AUTOSCALERS ---\n{hpa}\n--- POD RESOURCE USAGE (CPU/Memory) ---\n{top}"
+        return subprocess.check_output(cmd, shell=True).decode()
     except Exception as e:
-        return f"Error fetching k8s stats: {str(e)}"
+        return f"Error: {str(e)}"
 
-# --- RENDER CHAT HISTORY ---
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        
-        if "dataframe" in msg:
-            st.dataframe(msg["dataframe"], use_container_width=True)
-            
-        if "k8s_stats" in msg:
-            st.markdown(f"<div class='k8s-box'>{msg['k8s_stats']}</div>", unsafe_allow_html=True)
-            
-        if "charts" in msg:
-            df = msg["charts"]
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_pie = px.pie(df, names="model", title="Model Routing Distribution", hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            with c2:
-                fig_line = px.line(df, y="latency", color="model", markers=True, title="Latency over Time")
-                st.plotly_chart(fig_line, use_container_width=True)
-
-# --- BATCH LOGIC ---
-if launch_spike:
-    with st.chat_message("user"):
-        st.write(f"**[BATCH]** Running {concurrent_reqs} requests with prompt: '{spike_prompt}'")
-    st.session_state.messages.append({"role": "user", "content": f"**[BATCH]** Running {concurrent_reqs} requests with prompt: '{spike_prompt}'"})
-    
-    with st.chat_message("assistant"):
-        st.write("⏳ Pumping traffic to the gateway...")
-        
-        # Setup session for 500 connections to avoid Windows connection resets
-        session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=500, pool_maxsize=500, max_retries=3)
-        session.mount('http://', adapter)
-        
-        def send_request(idx):
-            start = time.time()
-            try:
-                res = session.post(API_URL, json={"prompt": spike_prompt}, timeout=300)
-                res.raise_for_status()
-                data = res.json()
-                return {"id": idx+1, "model": data.get("model_used"), "latency": data.get("latency_sec"), "queue_wait_sec": data.get("queue_wait_sec", 0), "response": data.get("response", ""), "success": True}
-            except Exception as e:
-                return {"id": idx+1, "model": "error", "latency": time.time() - start, "queue_wait_sec": 0, "response": f"Error: {str(e)}", "success": False}
-
-        results = []
-        with st.spinner(f"Processing {concurrent_reqs} requests..."):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                results = list(executor.map(send_request, range(concurrent_reqs)))
-        
-        df = pd.DataFrame(results)
-        
-        # Gather k8s stats right after load spike
-        k8s_out = get_k8s_stats()
-        
-        st.success("Batch complete!")
-        st.markdown("### Responses & Routing Table")
-        st.dataframe(df, use_container_width=True)
-        
-        st.markdown("### Backend Kubernetes Telemetry")
-        st.markdown(f"<div class='k8s-box'>{k8s_out}</div>", unsafe_allow_html=True)
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            fig_pie = px.pie(df, names="model", title="Model Routing Distribution", hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        with c2:
-            fig_line = px.line(df, y="latency", color="model", markers=True, title="Latency over Time")
-            st.plotly_chart(fig_line, use_container_width=True)
-            
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": f"Completed batch of {concurrent_reqs} requests.",
-            "dataframe": df,
-            "charts": df,
-            "k8s_stats": k8s_out
-        })
-
-# --- SINGLE REQUEST LOGIC ---
-if prompt := st.chat_input("Send a single request..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-        
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        message_placeholder.markdown("⏳ *Routing request...*")
-        
+async def send_one(text, model_name):
+    transport = httpx.AsyncHTTPTransport(retries=1)
+    async with httpx.AsyncClient(transport=transport, limits=httpx.Limits(keepalive_expiry=0, max_keepalive_connections=0)) as client:
         try:
-            # Setup session to prevent Windows socket drops on slow CPU inference
-            session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=3)
-            session.mount('http://', adapter)
+            start = time.time()
+            r = await client.post(f"{BASE_URL}/toxicity", json={"text": text, "model": model_name}, timeout=30.0, headers={"Connection": "close"})
+            res = r.json()
+            latency = round(time.time() - start, 3)
+            if "error" in res:
+                return {"replica_id": "error", "final_model": "error", "error": res["error"], "latency": latency}
             
-            start_t = time.time()
-            res = session.post(API_URL, json={"prompt": prompt}, timeout=300)
-            res.raise_for_status()
-            data = res.json()
-            
-            model = data.get("model_used", "unknown")
-            latency = data.get("latency_sec", 0)
-            q_wait = data.get("queue_wait_sec", 0)
-            resp = data.get("response", "")
-            
-            k8s_out = get_k8s_stats()
-            
-            output = f"**Routed to:** `{model}` (Latency: {latency}s | Queue Wait: {q_wait}s)\n\n**Response:**\n{resp}"
-            message_placeholder.markdown(output)
-            st.markdown("### Backend Kubernetes Telemetry")
-            st.markdown(f"<div class='k8s-box'>{k8s_out}</div>", unsafe_allow_html=True)
-            
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": output,
-                "k8s_stats": k8s_out
-            })
-            
+            return {
+                "routing": res.get("routing"),
+                "routing_reason": res.get("routing_reason"),
+                "routing_score": res.get("routing_score", 0),
+                "active_requests": res.get("active_requests_on_model", 0),
+                "final_model": res.get("final_model", model_name),
+                "toxicity": res.get("toxicity"),
+                "confidence": round(res.get("confidence", 0), 4),
+                "replica_path": json.dumps(res.get("replica_path", [])),
+                "latency": latency
+            }
         except Exception as e:
-            message_placeholder.error(f"Failed: {str(e)}")
-            st.session_state.messages.append({"role": "assistant", "content": f"**Error:** {str(e)}"})
+            return {"replica_id": "error", "final_model": "error", "error": str(e), "latency": 0}
+
+async def send_batch(text, model_name, count):
+    tasks = [send_one(text, model_name) for _ in range(count)]
+    return await asyncio.gather(*tasks)
+
+# --- Sidebar ---
+st.sidebar.header("Input")
+text_input = st.sidebar.text_area("Enter Text", "I completely disagree with everything you just said!")
+selected_model = st.sidebar.selectbox("Routing Strategy", ["adaptive", "baseline", "bert", "roberta"])
+
+st.sidebar.markdown("---")
+st.sidebar.header("Execution")
+run_single_btn = st.sidebar.button("Run Single Analysis")
+concurrency = st.sidebar.slider("Concurrent Requests", 1, 1000, 100)
+run_btn = st.sidebar.button("Run Batch Load Test")
+
+# --- Layout ---
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    if run_single_btn:
+        st.markdown("### Single Request Result")
+        with st.spinner(f"Analyzing..."):
+            try:
+                try:
+                    res = asyncio.run(send_one(text_input, selected_model))
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    res = loop.run_until_complete(send_one(text_input, selected_model))
+                
+                if "error" in res and res["error"]:
+                    st.error(f"Error: {res['error']}")
+                else:
+                    st.success(f"Routed to: {res.get('final_model')} | Latency: {res.get('latency')}s | Score: {res.get('routing_score')}")
+                    st.json(res)
+            except Exception as e:
+                st.error(f"Failed: {e}")
+
+    if run_btn:
+        st.markdown("### Batch Load Test Metrics")
+        with st.spinner(f"Sending {concurrency} requests using {selected_model}..."):
+            try:
+                try:
+                    results = asyncio.run(send_batch(text_input, selected_model, concurrency))
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    results = loop.run_until_complete(send_batch(text_input, selected_model, concurrency))
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                results = loop.run_until_complete(send_batch(text_input, selected_model, concurrency))
+
+        success = [r for r in results if "error" not in r]
+        fail = [r for r in results if "error" in r]
+
+        if success:
+            avg_latency = round(sum(r["latency"] for r in success) / len(success), 3)
+            throughput = round(len(success) / max(sum(r["latency"] for r in success), 0.001), 2)
+            
+            models_hit = {}
+            pods_hit = {}
+            for r in success:
+                mod = r.get("final_model")
+                models_hit[mod] = models_hit.get(mod, 0) + 1
+                
+                path_str = r.get("replica_path")
+                if path_str:
+                    path = json.loads(path_str)
+                    if path:
+                        pod = path[-1]
+                        pods_hit[pod] = pods_hit.get(pod, 0) + 1
+        else:
+            avg_latency = 0
+            throughput = 0
+            models_hit = {}
+            pods_hit = {}
+
+        st.success(f"Completed {len(success)} successful requests, {len(fail)} failed.")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Avg Latency (sec)", avg_latency)
+        m2.metric("Failures/Timeouts", len(fail))
+        m3.metric("Throughput (req/s)", throughput)
+
+        if success:
+            df = pd.DataFrame(success)
+            st.markdown("#### 🚀 Latency-Aware Distribution (Model Level)")
+            st.bar_chart(pd.DataFrame.from_dict(models_hit, orient='index', columns=['Requests']))
+            
+            st.markdown("#### 🎯 Kubernetes Real Load Balancing (Pod Level)")
+            st.bar_chart(pd.DataFrame.from_dict(pods_hit, orient='index', columns=['Requests']))
+
+            st.markdown("#### ⚡ Latency Timeline")
+            st.line_chart(df["latency"])
+
+            st.markdown("#### 🔄 In-Flight Active Requests Queue")
+            st.line_chart(df["active_requests"])
+
+            with st.expander("View Raw Responses Table"):
+                st.dataframe(df)
+
+with col2:
+    st.markdown("### 📊 Router Active Telemetry")
+    if st.button("Refresh Telemetry"):
+        pass
+        
+    try:
+        r = httpx.get(f"{BASE_URL}/routing-stats", timeout=2.0)
+        stats = r.json().get("stats", {})
+        
+        st.markdown("#### 🧠 Real-Time Routing Scores")
+        for m, s in stats.items():
+            col_a, col_b = st.columns(2)
+            col_a.metric(f"Score ({m})", s.get("routing_score", 0))
+            col_b.metric(f"Active Queue", s.get("active_requests", 0))
+            st.caption(f"Avg Latency: {s.get('avg_latency')}s | Failures: {s.get('failures')} | Timeouts: {s.get('timeouts')}")
+            st.progress(min(s.get("routing_score", 0) / 10.0, 1.0))
+            st.markdown("---")
+            
+    except:
+        st.warning("Router unreachable. Start port-forwarding!")
+        
+    st.markdown("### ⚙️ Kubernetes Control Plane")
+    st.markdown("#### Horizontal Pod Autoscalers (HPA)")
+    st.code(kubectl("kubectl get hpa"))
+    
+    st.markdown("#### Active Service Pods")
+    st.code(kubectl("kubectl get pods -l 'app in (fastapi-router, toxic-baseline, toxic-bert, toxic-roberta)'"))
+    
+    st.markdown("### 📚 Architecture Guide")
+    st.info("**Latency-Aware Scheduling**: The Router tracks real-time `queue depth` and `rolling latency` for each model service. It dynamically calculates a **Routing Score** and routes new requests to the least congested service! If a service timeouts, a circuit-breaker opens automatically.")
+    
+    st.markdown("**Grafana Access**")
+    st.write("Since we use a lightweight Loki setup without a backend database, there are no pre-built dashboards. To view logs:")
+    st.write("1. Open `http://localhost:3000`")
+    st.write("2. Click **Explore** (Compass Icon on left bar).")
+    st.write("3. Select **Loki** from the top-left dropdown.")
+    st.write("4. Enter `{app=\"fastapi-router\"}` and hit 'Run query'.")
