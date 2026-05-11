@@ -1,51 +1,98 @@
-# Distributed Adaptive NLP Inference Platform
+# Scalable NLP Inference System using Kubernetes
 
-A rubric-complete, presentation-ready distributed systems project demonstrating production MLOps and DevOps patterns using Kubernetes, FastAPI, and Transformers.
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.95+-00a393.svg)](https://fastapi.tiangolo.com/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28+-326ce5.svg)](https://kubernetes.io/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ed.svg)](https://www.docker.com/)
+[![Grafana](https://img.shields.io/badge/Grafana-Enabled-F46800.svg)](https://grafana.com/)
+[![Ansible](https://img.shields.io/badge/Ansible-Automation-EE0000.svg)](https://www.ansible.com/)
+[![Jenkins](https://img.shields.io/badge/Jenkins-CI%2FCD-D24939.svg)](https://www.jenkins.io/)
+[![k6](https://img.shields.io/badge/k6-Load_Testing-7D64FF.svg)](https://k6.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Key Features
-- **Distributed Microservices**: Independently scaled pods for baseline, BERT, and RoBERTa models.
-- **Production Adaptive Routing**: Intelligent API Gateway utilizing **EWMA Latency Smoothing**, **Routing Hysteresis**, and **Queue Depth Analysis**.
-- **Self-Healing Infrastructure**: Kubernetes-native Horizontal Pod Autoscalers (HPA) and automated failover circuit breakers.
-- **Experimental Benchmarking**: Native Streamlit dashboarding with CSV export to compare Adaptive vs Static Routing under heavy k6 sustained concurrency.
+An enterprise-grade, cloud-native Machine Learning Operations (MLOps) platform demonstrating distributed natural language processing (NLP) inference. This system serves multiple toxicity detection models (Baseline, BERT, RoBERTa) orchestrated by a custom-built Adaptive API Gateway, deployed on Kubernetes, and monitored by a lightweight observability stack.
 
-## Observability Architectural Justification: Why Loki instead of ELK?
+---
 
-For this distributed inference system, **Grafana Loki + Promtail** were deliberately selected over the traditional ELK (Elasticsearch, Logstash, Kibana) stack.
-- **Massive Memory Reduction**: Elasticsearch requires heavy JVM memory overhead (often 2GB-4GB+ just to idle). Loki is written in Go and stores compressed log streams, operating easily within a 16GB RAM laptop environment alongside heavy ML Models.
-- **Kubernetes-Native Context**: Loki automatically reads Kubernetes pod labels, natively matching the `kubectl top` mindset.
-- **Index-Free Speed**: Loki does not index the full text of the logs, drastically reducing storage costs and CPU overhead on our inference nodes.
+## 📖 Project Overview
 
-## CI/CD and Automation (Rubric Compliance)
+Modern NLP transformer models are notoriously resource-intensive. When deploying these models at scale, traditional static load balancing often leads to queue congestion and high tail-latencies (P95). 
 
-### Jenkins Integration
-A complete modular Jenkins pipeline is provided in `ci-cd/Jenkinsfile`. 
-It performs syntax checking, Docker image building, secure DockerHub pushing, and zero-downtime Kubernetes rolling restarts followed by a `k6` smoke test.
+This project solves this by introducing a **Latency-Aware Adaptive Routing Engine**. The gateway mathematically evaluates real-time queue depth and Exponentially Weighted Moving Average (EWMA) latency to intelligently distribute incoming requests across varying sizes of ML models. This ensures high throughput and latency stability under sustained traffic spikes, while Kubernetes Horizontal Pod Autoscalers (HPA) seamlessly provision new replicas in the background.
 
-### Ansible Configuration Management
-We utilize Ansible to orchestrate the infrastructure locally:
-- `ansible/deploy.yml`: Provisions Minikube, Metrics-Server, Kubernetes Secrets, and deployments.
-- `ansible/status.yml`: Audits the cluster.
-- `ansible/cleanup.yml`: Tears down the infrastructure.
+## ✨ Key Features
 
-### Demonstration Scripts
-- `demo-resiliency.ps1`: An automated script to brutally kill a worker pod mid-inference to demonstrate the Router's Circuit Breaking and Kubernetes' automatic Self-Healing recovery.
+- **Distributed Microservices Architecture**: Distinct, containerized pods for FastAPI Gateway, Baseline Model, BERT, and RoBERTa.
+- **Production Adaptive Routing**: Intelligent load balancing using EWMA latency smoothing, queue depth analysis, hysteresis thresholds, and cooldown windows.
+- **Kubernetes Self-Healing & Autoscaling**: Integrated `metrics-server` driving Horizontal Pod Autoscalers (HPA) alongside automated failover circuit breakers.
+- **Lightweight Observability Stack**: Grafana, Loki, and Promtail (replacing heavy ELK stacks) for real-time log aggregation and performance visualization.
+- **Enterprise Automation**: Fully automated infrastructure provisioning via **Ansible** and CI/CD pipelines via **Jenkins**.
+- **Experimental Benchmarking**: Built-in Streamlit dashboard and `k6` load-test suites to actively benchmark and export CSV metrics comparing Adaptive vs. Static routing.
 
-## Getting Started
+---
 
-1. Enable Minikube and metrics-server:
-   ```bash
-   minikube start
-   minikube addons enable metrics-server
-   ```
-2. Start the router port-forward in a dedicated terminal:
-   ```bash
-   kubectl port-forward svc/fastapi-router-service 8000:8000
-   ```
-3. Run the Experimental Dashboard:
-   ```bash
-   streamlit run frontend/app.py
-   ```
-4. Run Sustained k6 Load Tests:
-   ```bash
-   k6 run load-test/k6/moderate.js
-   ```
+## 🏛 System Architecture
+
+![High-Level Architecture](diagrams/1_High_Level_Architecture.png)
+
+### Adaptive Routing Workflow
+The API Gateway evaluates the cluster health upon every request. Rather than oscillating violently during micro-stutters, the router utilizes a `0.95` decay penalty, a `15%` hysteresis threshold, and a `3-second` freeze window to guarantee production stability.
+
+![Adaptive Routing](diagrams/3_Adaptive_Routing_and_Load_Balancing.png)
+
+---
+
+## 📂 Repository Structure
+
+The repository follows standard cloud-native structure guidelines:
+
+```text
+.
+├── ansible/               # Ansible playbooks (deploy, status, cleanup)
+├── ci-cd/                 # Jenkinsfile and CI/CD pipeline definitions
+├── diagrams/              # High-res architecture diagrams
+├── docs/                  # Extensive documentation guides
+├── frontend/              # Streamlit Research Dashboard
+├── gateway/               # FastAPI Router and ML Worker services
+├── k8s/                   # Kubernetes Manifests (Deployments, Services, HPA, Secrets)
+└── load-test/             # k6 benchmarking scripts (moderate, stress, queue-pressure)
+```
+
+---
+
+## 🚀 Getting Started
+
+To ensure a seamless setup, we have modularized the documentation. Please follow the guides in order:
+
+1. **[Installation Guide](docs/INSTALLATION.md)**: System requirements, dependencies, and environment setup.
+2. **[Running the Project](docs/RUNNING_THE_PROJECT.md)**: Step-by-step execution to spin up the cluster and access the UI.
+3. **[Ansible Deployment Guide](docs/ANSIBLE_GUIDE.md)**: How to automate infrastructure provisioning.
+4. **[Jenkins CI/CD Guide](docs/JENKINS_GUIDE.md)**: Setting up continuous integration and automated rollouts.
+5. **[Tech Stack Documentation](docs/TECH_STACK.md)**: Deep dive into why each technology was chosen.
+6. **[Troubleshooting](docs/TROUBLESHOOTING.md)**: Solutions to common Kubernetes, Minikube, and Docker issues.
+
+---
+
+## 📊 Benchmarking & Autoscaling Results
+
+### Static vs Adaptive Routing Comparison
+By utilizing `k6` to simulate 200 concurrent users (`load-test/k6/queue-pressure-test.js`), we observed the following under our Minikube deployment:
+
+* **Static Routing**: Suffers from queue congestion as heavier models (RoBERTa) bottleneck the round-robin sequence, artificially inflating cluster P95 latency.
+* **Adaptive Routing**: The EWMA Gateway detects the RoBERTa congestion in real-time, opens the hysteresis threshold, and dynamically bleeds the excess traffic to the faster Baseline model, preserving throughput and stabilizing tail latency.
+
+### Resiliency Demonstration
+The system guarantees zero-downtime inference. By executing `demo-resiliency.ps1`, a worker pod is violently terminated. The Gateway instantly catches the connection timeout, opens the circuit breaker, applies a mathematical failure penalty to the dead route, and redirects all traffic to surviving replicas while Kubernetes natively spins up a replacement pod in the background.
+
+---
+
+## 🔮 Future Improvements
+
+- **GPU Acceleration**: Migrating the `transformers` pipeline to leverage CUDA nodes for massive throughput increases.
+- **gRPC Integration**: Replacing HTTP/JSON transport between the Gateway and Worker pods with Protocol Buffers for lower serialization overhead.
+- **Prometheus Integration**: Expanding the metrics pipeline to include native Prometheus scraping for highly granular HPA custom metrics.
+
+---
+
+## 👨‍💻 Contributors
+Developed as a comprehensive MLOps Systems Engineering project demonstrating scalable NLP architectures, Kubernetes orchestration, and intelligent API gateway design.
