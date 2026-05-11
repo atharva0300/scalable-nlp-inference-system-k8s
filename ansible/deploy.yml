@@ -1,0 +1,44 @@
+---
+- name: Deploy Distributed Toxicity Inference Platform
+  hosts: kubernetes
+  gather_facts: false
+  
+  vars:
+    project_root: "../"
+    
+  tasks:
+    - name: Ensure Minikube is running
+      command: minikube status
+      register: minikube_status
+      failed_when: "'Running' not in minikube_status.stdout and 'Stopped' not in minikube_status.stdout"
+      ignore_errors: true
+
+    - name: Start Minikube if not running
+      command: minikube start --driver=docker
+      when: "'Running' not in minikube_status.stdout"
+
+    - name: Verify kubectl is accessible
+      command: kubectl get nodes
+      register: kubectl_nodes
+
+    - name: Enable Minikube metrics-server
+      command: minikube addons enable metrics-server
+      
+    - name: Apply Kubernetes Secrets
+      command: kubectl apply -f {{ project_root }}k8s/secrets/
+      ignore_errors: true
+
+    - name: Deploy Microservices
+      command: kubectl apply -f {{ project_root }}k8s/deployments/
+      
+    - name: Deploy Kubernetes Services
+      command: kubectl apply -f {{ project_root }}k8s/services/
+
+    - name: Deploy Horizontal Pod Autoscalers (HPA)
+      command: kubectl apply -f {{ project_root }}k8s/hpa/
+
+    - name: Trigger Rolling Restart for fresh inference deployment
+      command: kubectl rollout restart deployment fastapi-router toxic-baseline toxic-bert toxic-roberta
+
+    - name: Wait for deployments to stabilize
+      command: kubectl wait --for=condition=available --timeout=120s deployment/fastapi-router

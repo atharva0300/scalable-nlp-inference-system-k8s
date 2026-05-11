@@ -1,0 +1,20 @@
+---
+- name: Teardown Distributed Toxicity Inference Platform
+  hosts: kubernetes
+  gather_facts: false
+  
+  vars:
+    project_root: "../"
+    
+  tasks:
+    - name: Delete Deployments
+      command: kubectl delete -f {{ project_root }}k8s/deployments/
+      ignore_errors: true
+      
+    - name: Delete Services
+      command: kubectl delete -f {{ project_root }}k8s/services/
+      ignore_errors: true
+
+    - name: Delete HPA
+      command: kubectl delete -f {{ project_root }}k8s/hpa/
+      ignore_errors: true

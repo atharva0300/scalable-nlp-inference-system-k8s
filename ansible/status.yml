@@ -1,0 +1,21 @@
+---
+- name: Check Status of Distributed Toxicity Inference Platform
+  hosts: kubernetes
+  gather_facts: false
+  
+  tasks:
+    - name: Get Pod Status
+      command: kubectl get pods
+      register: pod_status
+
+    - name: Display Pods
+      debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    - name: Get HPA Status
+      command: kubectl get hpa
+      register: hpa_status
+
+    - name: Display HPA
+      debug:
+        msg: "{{ hpa_status.stdout_lines }}"
