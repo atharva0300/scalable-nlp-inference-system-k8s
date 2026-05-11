@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 import httpx
+import random
 import asyncio
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -20,11 +21,20 @@ ROLE = os.environ.get("ROLE", "router")
 MODEL_ID = os.environ.get("MODEL_ID", "") 
 POD_NAME = os.environ.get("HOSTNAME", "unknown-pod")
 
-app = FastAPI(title=f"Adaptive Toxicity Platform - {ROLE}")
+app = FastAPI(title=f"Distributed Research Platform - {ROLE}")
 
 class ToxicityRequest(BaseModel):
     text: str
-    model: str = "adaptive"
+    model: str = "auto"
+
+class RoutingModeRequest(BaseModel):
+    mode: str 
+
+ROUTING_MODE = "adaptive"
+
+# Production Stabilization State
+last_selected_model = "baseline"
+last_switch_time = 0.0
 
 def is_toxic_label(label: str) -> bool:
     label = label.lower()
@@ -39,7 +49,6 @@ def get_contextual_metadata(text, labels_list):
         contextual = True
     return {"possible_contextual_usage": contextual, "model_disagreement": disagreement}
 
-# WORKER LOGIC
 if ROLE == "worker":
     logger.info(f"Loading toxicity model {MODEL_ID} into memory...")
     model_pipeline = pipeline("text-classification", model=MODEL_ID)
@@ -64,7 +73,6 @@ if ROLE == "worker":
             "replica_id": POD_NAME
         }
 
-# ROUTER LOGIC
 if ROLE == "router":
     SERVICES = {
         "baseline": "http://toxic-baseline-service:8000/infer",
@@ -72,29 +80,34 @@ if ROLE == "router":
         "roberta": "http://toxic-roberta-service:8000/infer"
     }
     
-    # Adaptive Metrics State
     class ModelStats:
         def __init__(self):
             self.active_requests = 0
-            self.avg_latency = 0.5  # Bootstrap with nominal latency
+            self.ewma_latency = 0.5
+            self.alpha = 0.2
             self.total_requests = 0
             self.timeouts = 0
             self.failures = 0
             self.circuit_open = False
             self.circuit_open_time = 0
 
-        def update_latency(self, latency):
-            # EMA for rolling average latency
-            self.avg_latency = (self.avg_latency * 0.7) + (latency * 0.3)
+        def update_latency(self, current_latency):
+            self.ewma_latency = (self.alpha * current_latency) + ((1 - self.alpha) * self.ewma_latency)
             
         def get_score(self):
             if self.circuit_open:
-                if time.time() - self.circuit_open_time > 10:  # 10s cooldown
+                if time.time() - self.circuit_open_time > 10:
                     self.circuit_open = False
-                    self.avg_latency = 0.5 # reset penalty
+                    self.ewma_latency = 0.5
                 else:
-                    return 9999.0 # Heavy penalty
-            return (self.active_requests * 0.5) + (self.avg_latency * 0.5)
+                    return 9999.0
+                    
+            # Decay penalties naturally so they don't permanently inflate the score
+            self.timeouts *= 0.95
+            self.failures *= 0.95
+            
+            failure_penalty = (self.timeouts * 2.0) + (self.failures * 1.0)
+            return (self.ewma_latency * 0.7) + (self.active_requests * 0.3) + failure_penalty
 
     stats = {
         "baseline": ModelStats(),
@@ -127,12 +140,14 @@ if ROLE == "router":
             st.active_requests -= 1
             raise Exception(str(e))
 
-    def log_request(latency, req_id, req_text, toxicity, confidence, model_name, path_taken, reason, score, queue_depth):
+    def log_request(latency, req_id, req_text, toxicity, confidence, model_name, path_taken, reason, score, queue_depth, mode, ewma):
         log_data = {
             "endpoint": "toxicity",
             "request_id": req_id,
+            "routing_strategy": mode,
             "model": model_name,
             "latency_sec": latency,
+            "ewma_latency": ewma,
             "text_preview": req_text[:50],
             "toxicity_prediction": toxicity,
             "confidence": confidence,
@@ -144,8 +159,18 @@ if ROLE == "router":
         }
         print(json.dumps(log_data))
 
+    @app.post("/routing-mode")
+    async def set_routing_mode(req: RoutingModeRequest):
+        global ROUTING_MODE
+        if req.mode in ["adaptive", "static"]:
+            ROUTING_MODE = req.mode
+            return {"status": "success", "mode": ROUTING_MODE}
+        return {"error": "Mode must be 'adaptive' or 'static'"}
+
     @app.post("/toxicity")
     async def toxicity(req: ToxicityRequest):
+        global last_selected_model, last_switch_time
+        
         start = time.time()
         req_id = str(uuid.uuid4())
         
@@ -154,20 +179,57 @@ if ROLE == "router":
                 model_used = req.model
                 reason = "direct_request"
                 score = 0.0
+                prev_model = last_selected_model
                 
-                if req.model == "adaptive":
-                    # Find model with lowest routing score
-                    scores = {m: stats[m].get_score() for m in SERVICES.keys()}
-                    model_used = min(scores, key=scores.get)
-                    score = scores[model_used]
-                    reason = "adaptive_latency_aware"
+                if req.model == "auto":
+                    if ROUTING_MODE == "adaptive":
+                        scores = {m: stats[m].get_score() for m in SERVICES.keys()}
+                        best_model = min(scores, key=scores.get)
+                        best_score = scores[best_model]
+                        
+                        current_model = last_selected_model
+                        current_score = scores.get(current_model, 9999.0)
+                        
+                        time_since_switch = time.time() - last_switch_time
+                        
+                        if time_since_switch < 3.0:
+                            model_used = current_model
+                            score = current_score
+                            reason = "adaptive_cooldown_active"
+                        else:
+                            if current_model == best_model:
+                                model_used = best_model
+                                score = best_score
+                                reason = "adaptive_best_unchanged"
+                            else:
+                                diff_ratio = (current_score - best_score) / max(current_score, 0.001)
+                                if diff_ratio > 0.15:
+                                    model_used = best_model
+                                    score = best_score
+                                    reason = "adaptive_hysteresis_switch"
+                                    last_selected_model = model_used
+                                    last_switch_time = time.time()
+                                else:
+                                    model_used = current_model
+                                    score = current_score
+                                    reason = "adaptive_hysteresis_keep"
+                    else:
+                        rand_val = random.random()
+                        if rand_val < 0.5:
+                            model_used = "baseline"
+                        elif rand_val < 0.8:
+                            model_used = "bert"
+                        else:
+                            model_used = "roberta"
+                        score = stats[model_used].get_score()
+                        reason = "static_weighted_round_robin"
+                        last_selected_model = model_used
                     
                 if model_used in SERVICES:
                     try:
                         res = await call_worker(client, model_used, req.text)
                     except Exception as e:
-                        # Fallback logic if circuit breaker opened
-                        if req.model == "adaptive":
+                        if req.model == "auto":
                             scores = {m: stats[m].get_score() for m in SERVICES.keys() if m != model_used}
                             if scores:
                                 fallback_model = min(scores, key=scores.get)
@@ -181,26 +243,26 @@ if ROLE == "router":
 
                     lat = round(time.time() - start, 4)
                     tox_level = "high" if res["is_toxic"] else "low"
-                    
                     ctx = get_contextual_metadata(req.text, [res["is_toxic"]])
                     
-                    log_request(lat, req_id, req.text, tox_level, res["confidence"], model_used, [res["replica_id"]], reason, score, stats[model_used].active_requests)
+                    log_request(lat, req_id, req.text, tox_level, res["confidence"], model_used, [res["replica_id"]], reason, score, stats[model_used].active_requests, ROUTING_MODE, stats[model_used].ewma_latency)
                     
                     return {
                         "request_id": req_id,
-                        "routing": "adaptive" if req.model == "adaptive" else "direct",
+                        "routing_mode": ROUTING_MODE,
                         "routing_reason": reason,
                         "routing_score": round(score, 4),
+                        "previous_model": prev_model,
                         "final_model": model_used,
+                        "ewma_latency": round(stats[model_used].ewma_latency, 4),
                         "toxicity": tox_level,
                         "confidence": round(res["confidence"], 4),
-                        "possible_contextual_usage": ctx["possible_contextual_usage"],
                         "replica_path": [res["replica_id"]],
                         "active_requests_on_model": stats[model_used].active_requests,
                         "latency_sec": lat
                     }
                 else:
-                    return {"error": "Invalid model. Use adaptive, baseline, bert, roberta"}
+                    return {"error": "Invalid model."}
             except Exception as e:
                 return {"error": str(e)}
 
@@ -211,13 +273,13 @@ if ROLE == "router":
             payload[m] = {
                 "routing_score": round(st.get_score(), 4),
                 "active_requests": st.active_requests,
-                "avg_latency": round(st.avg_latency, 4),
+                "ewma_latency": round(st.ewma_latency, 4),
                 "total_requests": st.total_requests,
                 "timeouts": st.timeouts,
                 "failures": st.failures,
                 "circuit_open": st.circuit_open
             }
-        return {"stats": payload}
+        return {"mode": ROUTING_MODE, "stats": payload, "last_switch_time": last_switch_time, "last_selected_model": last_selected_model}
 
 @app.get("/health")
 async def health():
