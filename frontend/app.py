@@ -12,8 +12,7 @@ st.set_page_config(page_title="Distributed MLOps Platform", layout="wide")
 
 BASE_URL = "http://127.0.0.1:8000"
 
-st.title("Distributed Adaptive NLP Inference Platform")
-st.subheader("MLOps Research & Observability Dashboard")
+st.title("Scalable NLP Inference system using Kubernetes")
 
 def kubectl(cmd):
     try:
