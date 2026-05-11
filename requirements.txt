@@ -1,4 +1,11 @@
+streamlit
+requests
+pandas
+matplotlib
+aiohttp
 fastapi
 uvicorn
 transformers
 torch
+numpy
+pydantic
