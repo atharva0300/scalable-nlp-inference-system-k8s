@@ -1,9 +1,8 @@
+# GATEWAY ROUTER
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: fastapi-router
-  labels:
-    app: fastapi-router
 spec:
   replicas: 1
   selector:
@@ -21,17 +20,17 @@ spec:
         ports:
         - containerPort: 8000
         env:
-        - name: DISTILBERT_URL
-          value: "http://nlp-distilbert-service:8001/infer"
-        - name: BERT_URL
-          value: "http://nlp-bert-service:8001/infer"
-        - name: ROBERTA_URL
-          value: "http://nlp-roberta-service:8001/infer"
-        - name: DEBERTA_URL
-          value: "http://nlp-deberta-service:8001/infer"
+        - name: ROLE
+          value: "router"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
         resources:
           requests:
-            cpu: "200m"
+            cpu: "100m"
             memory: "256Mi"
           limits:
             cpu: "500m"
@@ -40,12 +39,163 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: fastapi-service
+  name: fastapi-router-service
 spec:
   selector:
     app: fastapi-router
   ports:
-    - protocol: TCP
-      port: 8000
-      targetPort: 8000
-  type: ClusterIP
+  - port: 8000
+    targetPort: 8000
+---
+# TOXIC BASELINE WORKER
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxic-baseline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toxic-baseline
+  template:
+    metadata:
+      labels:
+        app: toxic-baseline
+    spec:
+      containers:
+      - name: toxic-baseline
+        image: my-fastapi-router:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ROLE
+          value: "worker"
+        - name: MODEL_ID
+          value: "martin-ha/toxic-comment-model"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxic-baseline-service
+spec:
+  selector:
+    app: toxic-baseline
+  ports:
+  - port: 8000
+    targetPort: 8000
+---
+# TOXIC BERT WORKER
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxic-bert
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toxic-bert
+  template:
+    metadata:
+      labels:
+        app: toxic-bert
+    spec:
+      containers:
+      - name: toxic-bert
+        image: my-fastapi-router:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ROLE
+          value: "worker"
+        - name: MODEL_ID
+          value: "unitary/toxic-bert"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "300m"
+            memory: "768Mi"
+          limits:
+            cpu: "1"
+            memory: "1.5Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxic-bert-service
+spec:
+  selector:
+    app: toxic-bert
+  ports:
+  - port: 8000
+    targetPort: 8000
+---
+# TOXIC ROBERTA WORKER
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxic-roberta
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toxic-roberta
+  template:
+    metadata:
+      labels:
+        app: toxic-roberta
+    spec:
+      containers:
+      - name: toxic-roberta
+        image: my-fastapi-router:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ROLE
+          value: "worker"
+        - name: MODEL_ID
+          value: "unitary/unbiased-toxic-roberta"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: "300m"
+            memory: "768Mi"
+          limits:
+            cpu: "1"
+            memory: "1.5Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxic-roberta-service
+spec:
+  selector:
+    app: toxic-roberta
+  ports:
+  - port: 8000
+    targetPort: 8000

@@ -1,117 +1,224 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import Response
-import httpx
+import anyio
+import torch
 import time
-import asyncio
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
-import logging
 import json
+import logging
 import os
-from datetime import datetime
+import uuid
+import httpx
+import asyncio
+from fastapi import FastAPI
+from pydantic import BaseModel
+from transformers import pipeline
 
-app = FastAPI(title="Adaptive NLP Inference Router")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("nlp-api")
 
-# JSON Logging for ELK
-logger = logging.getLogger("NLPRouter")
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}'))
-logger.addHandler(handler)
+torch.set_num_threads(1)
 
-# Prometheus Metrics
-REQUEST_COUNT = Counter('request_count', 'Total generate requests', ['model'])
-LATENCY = Histogram('request_latency_seconds', 'Request latency in seconds', ['model'])
-QUEUE_LENGTH = Gauge('active_requests', 'Active requests in flight')
+ROLE = os.environ.get("ROLE", "router")
+MODEL_ID = os.environ.get("MODEL_ID", "") 
+POD_NAME = os.environ.get("HOSTNAME", "unknown-pod")
 
-# Four HuggingFace model tiers — separate K8s services
-MODELS = {
-    "distilbert": os.getenv("DISTILBERT_URL", "http://nlp-distilbert-service:8001/infer"),
-    "bert":       os.getenv("BERT_URL",       "http://nlp-bert-service:8001/infer"),
-    "deberta":    os.getenv("DEBERTA_URL",    "http://nlp-deberta-service:8001/infer"),
-}
-# Bounded semaphore — max 6 real concurrent model calls
-LLM_SEMAPHORE = asyncio.Semaphore(6)
+app = FastAPI(title=f"Adaptive Toxicity Platform - {ROLE}")
 
-http_client: httpx.AsyncClient = None
+class ToxicityRequest(BaseModel):
+    text: str
+    model: str = "adaptive"
 
-@app.on_event("startup")
-async def startup_event():
-    global http_client
-    limits = httpx.Limits(max_keepalive_connections=200, max_connections=200)
-    http_client = httpx.AsyncClient(timeout=120.0, limits=limits)
+def is_toxic_label(label: str) -> bool:
+    label = label.lower()
+    return label in ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate", "label_1"]
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await http_client.aclose()
+def get_contextual_metadata(text, labels_list):
+    disagreement = len(set(labels_list)) > 1
+    contextual = False
+    if '"' in text or "'" in text:
+        contextual = True
+    if len(text.split()) > 30 and disagreement:
+        contextual = True
+    return {"possible_contextual_usage": contextual, "model_disagreement": disagreement}
 
-def route_request() -> str:
-    active = QUEUE_LENGTH._value.get()
-    if active > 12:
-        return "distilbert"   # fastest
-    elif active > 5:
-        return "bert"         # medium
-    else:
-        return "deberta"      # best quality
+# WORKER LOGIC
+if ROLE == "worker":
+    logger.info(f"Loading toxicity model {MODEL_ID} into memory...")
+    model_pipeline = pipeline("text-classification", model=MODEL_ID)
+    logger.info("Model loaded successfully.")
 
-@app.post("/generate")
-async def generate_text(request: Request):
-    data = await request.json()
-    prompt = data.get("prompt", "")
+    class InferRequest(BaseModel):
+        text: str
 
-    QUEUE_LENGTH.inc()
-    start_time = time.time()
-    queue_enter_time = time.time()
+    @app.on_event("startup")
+    async def startup_event():
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        limiter.total_tokens = 2
 
-    try:
-        async with LLM_SEMAPHORE:
-            queue_wait_sec = time.time() - queue_enter_time
-
-            target_model = route_request()
-            target_url = MODELS[target_model]
-
-            try:
-                response = await http_client.post(target_url, json={"prompt": prompt})
-                response.raise_for_status()
-                result = response.json()
-            except Exception as e:
-                logger.error(f"Error calling {target_model}: {e}")
-                raise HTTPException(status_code=502, detail=f"Model {target_model} error: {e}")
-
-        latency = time.time() - start_time
-        LATENCY.labels(model=target_model).observe(latency)
-        REQUEST_COUNT.labels(model=target_model).inc()
-
-        log_payload = {
-            "event": "inference",
-            "model": target_model,
-            "latency_sec": round(latency, 3),
-            "queue_length_at_request": QUEUE_LENGTH._value.get(),
-            "queue_wait_sec": round(queue_wait_sec, 3),
-            "active_requests": 6 - LLM_SEMAPHORE._value,
-            "success": True,
-            "request_id": f"{target_model}-{int(time.time()*1000)}",
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
-        logger.info(json.dumps(log_payload))
-
-        try:
-            await http_client.post("http://logstash-service:5000", json=log_payload, timeout=2.0)
-        except Exception:
-            pass
-
+    @app.post("/infer")
+    def infer(req: InferRequest):
+        res = model_pipeline(req.text)[0]
+        is_tox = is_toxic_label(res["label"])
         return {
-            "model_used": target_model,
-            "latency_sec": round(latency, 2),
-            "queue_wait_sec": round(queue_wait_sec, 2),
-            "response": result.get("response", "")
+            "label": res["label"],
+            "confidence": res["score"],
+            "is_toxic": is_tox,
+            "replica_id": POD_NAME
         }
-    finally:
-        QUEUE_LENGTH.dec()
 
-@app.get("/metrics")
-def get_metrics():
-    return Response(content=generate_latest(), media_type="text/plain")
+# ROUTER LOGIC
+if ROLE == "router":
+    SERVICES = {
+        "baseline": "http://toxic-baseline-service:8000/infer",
+        "bert": "http://toxic-bert-service:8000/infer",
+        "roberta": "http://toxic-roberta-service:8000/infer"
+    }
+    
+    # Adaptive Metrics State
+    class ModelStats:
+        def __init__(self):
+            self.active_requests = 0
+            self.avg_latency = 0.5  # Bootstrap with nominal latency
+            self.total_requests = 0
+            self.timeouts = 0
+            self.failures = 0
+            self.circuit_open = False
+            self.circuit_open_time = 0
+
+        def update_latency(self, latency):
+            # EMA for rolling average latency
+            self.avg_latency = (self.avg_latency * 0.7) + (latency * 0.3)
+            
+        def get_score(self):
+            if self.circuit_open:
+                if time.time() - self.circuit_open_time > 10:  # 10s cooldown
+                    self.circuit_open = False
+                    self.avg_latency = 0.5 # reset penalty
+                else:
+                    return 9999.0 # Heavy penalty
+            return (self.active_requests * 0.5) + (self.avg_latency * 0.5)
+
+    stats = {
+        "baseline": ModelStats(),
+        "bert": ModelStats(),
+        "roberta": ModelStats()
+    }
+
+    async def call_worker(client, model_name, text):
+        st = stats[model_name]
+        st.active_requests += 1
+        st.total_requests += 1
+        start_time = time.time()
+        
+        try:
+            r = await client.post(SERVICES[model_name], json={"text": text}, timeout=15.0)
+            r.raise_for_status()
+            data = r.json()
+            lat = time.time() - start_time
+            st.update_latency(lat)
+            st.active_requests -= 1
+            return data
+        except httpx.TimeoutException:
+            st.timeouts += 1
+            st.active_requests -= 1
+            st.circuit_open = True
+            st.circuit_open_time = time.time()
+            raise Exception("Timeout")
+        except Exception as e:
+            st.failures += 1
+            st.active_requests -= 1
+            raise Exception(str(e))
+
+    def log_request(latency, req_id, req_text, toxicity, confidence, model_name, path_taken, reason, score, queue_depth):
+        log_data = {
+            "endpoint": "toxicity",
+            "request_id": req_id,
+            "model": model_name,
+            "latency_sec": latency,
+            "text_preview": req_text[:50],
+            "toxicity_prediction": toxicity,
+            "confidence": confidence,
+            "path_taken": path_taken,
+            "routing_reason": reason,
+            "routing_score": score,
+            "queue_depth": queue_depth,
+            "type": "nlp_inference_log"
+        }
+        print(json.dumps(log_data))
+
+    @app.post("/toxicity")
+    async def toxicity(req: ToxicityRequest):
+        start = time.time()
+        req_id = str(uuid.uuid4())
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                model_used = req.model
+                reason = "direct_request"
+                score = 0.0
+                
+                if req.model == "adaptive":
+                    # Find model with lowest routing score
+                    scores = {m: stats[m].get_score() for m in SERVICES.keys()}
+                    model_used = min(scores, key=scores.get)
+                    score = scores[model_used]
+                    reason = "adaptive_latency_aware"
+                    
+                if model_used in SERVICES:
+                    try:
+                        res = await call_worker(client, model_used, req.text)
+                    except Exception as e:
+                        # Fallback logic if circuit breaker opened
+                        if req.model == "adaptive":
+                            scores = {m: stats[m].get_score() for m in SERVICES.keys() if m != model_used}
+                            if scores:
+                                fallback_model = min(scores, key=scores.get)
+                                reason = f"fallback_from_{model_used}"
+                                model_used = fallback_model
+                                res = await call_worker(client, model_used, req.text)
+                            else:
+                                raise Exception("All models overloaded")
+                        else:
+                            raise e
+
+                    lat = round(time.time() - start, 4)
+                    tox_level = "high" if res["is_toxic"] else "low"
+                    
+                    ctx = get_contextual_metadata(req.text, [res["is_toxic"]])
+                    
+                    log_request(lat, req_id, req.text, tox_level, res["confidence"], model_used, [res["replica_id"]], reason, score, stats[model_used].active_requests)
+                    
+                    return {
+                        "request_id": req_id,
+                        "routing": "adaptive" if req.model == "adaptive" else "direct",
+                        "routing_reason": reason,
+                        "routing_score": round(score, 4),
+                        "final_model": model_used,
+                        "toxicity": tox_level,
+                        "confidence": round(res["confidence"], 4),
+                        "possible_contextual_usage": ctx["possible_contextual_usage"],
+                        "replica_path": [res["replica_id"]],
+                        "active_requests_on_model": stats[model_used].active_requests,
+                        "latency_sec": lat
+                    }
+                else:
+                    return {"error": "Invalid model. Use adaptive, baseline, bert, roberta"}
+            except Exception as e:
+                return {"error": str(e)}
+
+    @app.get("/routing-stats")
+    async def get_routing_stats():
+        payload = {}
+        for m, st in stats.items():
+            payload[m] = {
+                "routing_score": round(st.get_score(), 4),
+                "active_requests": st.active_requests,
+                "avg_latency": round(st.avg_latency, 4),
+                "total_requests": st.total_requests,
+                "timeouts": st.timeouts,
+                "failures": st.failures,
+                "circuit_open": st.circuit_open
+            }
+        return {"stats": payload}
 
 @app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+async def health():
+    return {"status": "healthy", "pod": POD_NAME}
