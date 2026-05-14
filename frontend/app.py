@@ -12,7 +12,7 @@ st.set_page_config(page_title="Distributed MLOps Platform", layout="wide")
 
 BASE_URL = "http://127.0.0.1:8000"
 
-st.title("Scalable NLP Inference system using Kubernetes")
+st.title("Scalable NLP Inference System using Kubernetes")
 
 def kubectl(cmd):
     try:
@@ -25,7 +25,7 @@ def kubectl(cmd):
 def get_pod_metrics():
     if 'cached_pod_metrics' not in st.session_state:
         st.session_state['cached_pod_metrics'] = pd.DataFrame()
-        st.session_state['metrics_health'] = "🔴 Warming Up / Unavailable"
+        st.session_state['metrics_health'] = "Warming Up / Unavailable"
 
     out = kubectl("kubectl top pods --no-headers")
     data = []
@@ -45,15 +45,15 @@ def get_pod_metrics():
                     
         if data:
             st.session_state['cached_pod_metrics'] = pd.DataFrame(data)
-            st.session_state['metrics_health'] = "🟢 Healthy"
+            st.session_state['metrics_health'] = "Healthy"
             return st.session_state['cached_pod_metrics']
             
     # Fallback to cache if transient failure
     if not st.session_state['cached_pod_metrics'].empty:
-        st.session_state['metrics_health'] = "🟡 Delayed (Using Cache)"
+        st.session_state['metrics_health'] = "Delayed (Using Cache)"
         return st.session_state['cached_pod_metrics']
         
-    st.session_state['metrics_health'] = "🔴 Warming Up..."
+    st.session_state['metrics_health'] = "Warming Up..."
     return pd.DataFrame()
 
 
@@ -78,6 +78,7 @@ async def send_one(client, text, sem):
             
             return {
                 "routing_mode": res.get("routing_mode"),
+                "output": f"{res.get('toxicity', '').upper()} ({round(res.get('confidence', 0) * 100, 1)}%)",
                 "routing_reason": res.get("routing_reason"),
                 "routing_score": res.get("routing_score", 0),
                 "active_requests": res.get("active_requests_on_model", 0),
@@ -102,9 +103,15 @@ async def send_batch(text, total, conc):
 # --- Sidebar ---
 st.sidebar.header("Global Routing Controller")
 selected_mode = st.sidebar.radio("Routing Strategy", ["adaptive", "static"])
-if st.sidebar.button("Update Strategy in Cluster"):
-    res = asyncio.run(set_routing_mode(selected_mode))
-    st.sidebar.success(f"Cluster Mode: {res.get('mode', 'Error')}")
+if "last_mode" not in st.session_state:
+    st.session_state["last_mode"] = None
+
+if selected_mode != st.session_state["last_mode"]:
+    try:
+        asyncio.run(set_routing_mode(selected_mode))
+        st.session_state["last_mode"] = selected_mode
+    except:
+        pass
 
 st.sidebar.markdown("---")
 st.sidebar.header("Payload")
@@ -112,18 +119,18 @@ text_input = st.sidebar.text_area("Contextual Text", "“I could kill you for de
 
 st.sidebar.markdown("---")
 st.sidebar.header("Execution Modes")
-run_single_btn = st.sidebar.button("🔍 Run Single Query")
+run_single_btn = st.sidebar.button("Run Single Query")
 st.sidebar.markdown("---")
 total_requests = st.sidebar.number_input("Total Requests (Benchmark)", min_value=1, max_value=5000, value=200)
 concurrency = st.sidebar.slider("Concurrency", 1, 200, 50)
-run_btn = st.sidebar.button("🚀 Run Benchmark")
+run_btn = st.sidebar.button("Run Benchmark")
 
 # --- Layout ---
 col1, col2 = st.columns([2, 1.2])
 
 with col1:
     if run_single_btn:
-        st.markdown("### 🔍 Single Query Inspection")
+        st.markdown("### Single Query Inspection")
         with st.spinner("Analyzing..."):
             async def wrap_send_one():
                 sem = asyncio.Semaphore(1)
@@ -147,7 +154,7 @@ with col1:
                 st.error(f"Failed: {e}")
 
     if run_btn:
-        st.markdown(f"### 🚀 Benchmarking: `{selected_mode.upper()}` Mode")
+        st.markdown(f"### Benchmarking: `{selected_mode.upper()}` Mode")
         with st.spinner(f"Processing {total_requests} requests (Max {concurrency} concurrently)..."):
             try:
                 try:
@@ -191,38 +198,47 @@ with col1:
         m4.metric("Adaptive Route Changes", switches)
 
         if not df.empty:
-            st.markdown("#### 📋 Per-Request Model Response Table")
-            display_df = df[["timestamp", "final_model", "replica_path", "latency", "ewma_latency", "active_requests", "routing_score", "routing_reason"]]
+            st.markdown("#### Per-Request Model Response Table")
+            display_df = df[[
+                "timestamp",
+                "final_model",
+                "output",
+                "replica_path",
+                "latency",
+                "ewma_latency",
+                "routing_score",
+                "routing_reason"
+            ]]
             st.dataframe(display_df, height=300)
             
             st.download_button(
-                label="📥 Export Benchmark to CSV",
+                label="Export Benchmark to CSV",
                 data=df.to_csv(index=False).encode('utf-8'),
                 file_name=f"benchmark_{selected_mode}_{total_requests}req.csv",
                 mime="text/csv",
             )
 
-            st.markdown("#### 🚀 Routing Distribution Heatmap")
+            st.markdown("#### Routing Distribution Heatmap")
             st.bar_chart(df["final_model"].value_counts())
 
-            st.markdown("#### ⚡ Latency Curve vs Concurrency")
+            st.markdown("#### Latency Curve vs Concurrency")
             st.line_chart(df["latency"])
 
 with col2:
-    st.markdown("### 📊 Infrastructure Status")
+    st.markdown("### Infrastructure Status")
     
     # Scale Status Logic
     hpa_out = kubectl("kubectl get hpa")
     pods_out = kubectl('kubectl get pods -l "app in (fastapi-router, toxic-baseline, toxic-bert, toxic-roberta)"')
     pod_count = pods_out.count("Running")
     
-    status_label = "🟢 STABLE"
+    status_label = "STABLE"
     recent_events = kubectl('kubectl get events --field-selector involvedObject.kind=HorizontalPodAutoscaler')
     if "SuccessfulRescale" in recent_events and "New size:" in recent_events:
         if "scale down" in recent_events.lower():
-            status_label = "🔵 SCALING DOWN (Cooldown)"
+            status_label = "SCALING DOWN (Cooldown)"
         else:
-            status_label = "🟡 SCALING UP (Load Spiked)"
+            status_label = "SCALING UP (Load Spiked)"
             
     st.markdown(f"#### Cluster State: **{status_label}**")
     st.caption(f"Total Active Pods: {pod_count}")
@@ -237,28 +253,29 @@ with col2:
         stats = data.get("stats", {})
         
         for m, s in stats.items():
-            col_a, col_b = st.columns(2)
-            col_a.metric(f"Score ({m})", s.get("routing_score", 0))
-            col_b.metric(f"Queue Depth", s.get("active_requests", 0))
+            st.metric(
+                f"Score ({m})",
+                s.get("routing_score", 0)
+            )
             st.caption(f"EWMA: {s.get('ewma_latency')}s | Failures: {s.get('failures')} | Timeouts: {s.get('timeouts')}")
             st.markdown("---")
-    except:
-        st.warning("Router unreachable. Start port-forwarding!")
+    except Exception as e:
+        st.warning(f"Telemetry Error: {e}")
 
-    st.markdown("#### 📉 CPU / Memory Summary")
+    st.markdown("#### CPU / Memory Summary")
     metrics_df = get_pod_metrics()
     st.caption(f"Metrics Health: **{st.session_state.get('metrics_health', 'Unknown')}**")
     st.caption("Metrics are collected from Kubernetes metrics-server. Temporary delays may occur during pod startup or autoscaling stabilization.")
     if not metrics_df.empty:
         st.dataframe(metrics_df, height=200)
 
-    st.markdown("#### ⚙️ HPA Status Overview")
+    st.markdown("#### HPA Status Overview")
     st.code(hpa_out)
     
-    st.markdown("#### 🟢 Active Replicas")
+    st.markdown("#### Active Replicas")
     st.code(pods_out)
 
         
 
-    st.markdown("### 📚 Architecture Guide: K8s vs Router")
+    st.markdown("### Architecture Guide: K8s vs Router")
     st.info("**1. Adaptive Routing (Model Selection)**: The FastAPI Router dynamically selects which *Model Service* to query (e.g. `toxic-baseline`) based on EWMA latency, Hysteresis, and Queue Depth.\n\n**2. Kubernetes Load Balancing (Pod Selection)**: Once the Router mathematically selects the optimal Model, the underlying *Kubernetes Service* abstraction natively distributes that request across the underlying *Pod Replicas* using connection-level Load Balancing.")
