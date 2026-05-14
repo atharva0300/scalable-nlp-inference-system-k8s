@@ -83,6 +83,7 @@ if ROLE == "router":
     class ModelStats:
         def __init__(self):
             self.active_requests = 0
+            self.queue_depth = 0
             self.ewma_latency = 0.5
             self.alpha = 0.2
             self.total_requests = 0
@@ -117,27 +118,54 @@ if ROLE == "router":
 
     async def call_worker(client, model_name, text):
         st = stats[model_name]
+
+        # queue enters
+        st.queue_depth += 1
+
         st.active_requests += 1
         st.total_requests += 1
+
         start_time = time.time()
-        
+
         try:
-            r = await client.post(SERVICES[model_name], json={"text": text}, timeout=15.0)
+            r = await client.post(
+                SERVICES[model_name],
+                json={"text": text},
+                timeout=15.0
+            )
+
             r.raise_for_status()
+
             data = r.json()
+
             lat = time.time() - start_time
+
             st.update_latency(lat)
+
             st.active_requests -= 1
+
+            # queue exits
+            st.queue_depth = max(0, st.queue_depth - 1)
+
             return data
+
         except httpx.TimeoutException:
             st.timeouts += 1
+
             st.active_requests -= 1
+            st.queue_depth = max(0, st.queue_depth - 1)
+
             st.circuit_open = True
             st.circuit_open_time = time.time()
+
             raise Exception("Timeout")
+
         except Exception as e:
             st.failures += 1
+
             st.active_requests -= 1
+            st.queue_depth = max(0, st.queue_depth - 1)
+
             raise Exception(str(e))
 
     def log_request(latency, req_id, req_text, toxicity, confidence, model_name, path_taken, reason, score, queue_depth, mode, ewma):
@@ -249,6 +277,7 @@ if ROLE == "router":
                     
                     return {
                         "request_id": req_id,
+                        "queue_depth": stats[model_used].queue_depth,
                         "routing_mode": ROUTING_MODE,
                         "routing_reason": reason,
                         "routing_score": round(score, 4),
@@ -272,6 +301,7 @@ if ROLE == "router":
         for m, st in stats.items():
             payload[m] = {
                 "routing_score": round(st.get_score(), 4),
+                "queue_depth": st.queue_depth,
                 "active_requests": st.active_requests,
                 "ewma_latency": round(st.ewma_latency, 4),
                 "total_requests": st.total_requests,
