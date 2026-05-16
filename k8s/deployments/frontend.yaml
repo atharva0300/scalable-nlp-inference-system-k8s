@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: frontend
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: frontend
+
+  template:
+    metadata:
+      labels:
+        app: frontend
+
+    spec:
+      containers:
+        - name: frontend
+          image: atharva0300/frontend:latest
+          imagePullPolicy: Always
+
+          env:
+            - name: API_URL
+              value: "http://fastapi-router-service:8000"
+
+          ports:
+            - containerPort: 8501
