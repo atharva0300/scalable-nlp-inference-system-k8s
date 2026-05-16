@@ -11,6 +11,7 @@ import asyncio
 from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import pipeline
+from prometheus_fastapi_instrumentator import Instrumentator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nlp-api")
@@ -22,6 +23,7 @@ MODEL_ID = os.environ.get("MODEL_ID", "")
 POD_NAME = os.environ.get("HOSTNAME", "unknown-pod")
 
 app = FastAPI(title=f"Distributed Research Platform - {ROLE}")
+Instrumentator().instrument(app).expose(app)
 
 class ToxicityRequest(BaseModel):
     text: str

@@ -1,5 +1,7 @@
 fastapi==0.103.1
 uvicorn==0.23.2
 httpx==0.25.0
-prometheus-client==0.17.1
 transformers==4.35.2
+torch
+prometheus-client==0.17.1
+prometheus-fastapi-instrumentator==5.11.2

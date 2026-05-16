@@ -13,10 +13,12 @@ spec:
       labels:
         app: fastapi-router
     spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
       containers:
       - name: fastapi-router
-        image: my-fastapi-router:latest
-        imagePullPolicy: Never
+        image: atharva0300/fastapi-router:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
@@ -62,10 +64,12 @@ spec:
       labels:
         app: toxic-baseline
     spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
       containers:
       - name: toxic-baseline
-        image: my-fastapi-router:latest
-        imagePullPolicy: Never
+        image: atharva0300/fastapi-router:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
@@ -113,10 +117,12 @@ spec:
       labels:
         app: toxic-bert
     spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
       containers:
       - name: toxic-bert
-        image: my-fastapi-router:latest
-        imagePullPolicy: Never
+        image: atharva0300/fastapi-router:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
@@ -164,10 +170,12 @@ spec:
       labels:
         app: toxic-roberta
     spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
       containers:
       - name: toxic-roberta
-        image: my-fastapi-router:latest
-        imagePullPolicy: Never
+        image: atharva0300/fastapi-router:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
