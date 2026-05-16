@@ -7,6 +7,7 @@ pipeline {
         // Requires Jenkins Credentials Plugin with ID 'dockerhub-credentials'
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
         MINIKUBE_ENV = "minikube docker-env"
+        FRONTEND_IMAGE = 'atharva0300/frontend'
     }
 
     stages {
@@ -26,21 +27,50 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build Docker Images') {
             steps {
-                echo "Building lightweight FastAPI Router image..."
+
+                echo "Building FastAPI Router image..."
+
                 dir('gateway/fastapi') {
-                    sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} -t ${DOCKER_IMAGE}:latest .'
+                    sh '''
+                    docker build \
+                    -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
+                    -t ${DOCKER_IMAGE}:latest .
+                    '''
+                }
+
+                echo "Building Frontend image..."
+
+                dir('frontend') {
+                    sh '''
+                    docker build \
+                    -t ${FRONTEND_IMAGE}:${DOCKER_TAG} \
+                    -t ${FRONTEND_IMAGE}:latest .
+                    '''
                 }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                echo "Pushing image to DockerHub..."
-                sh 'echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin'
-                sh 'docker push ${DOCKER_IMAGE}:${DOCKER_TAG}'
-                sh 'docker push ${DOCKER_IMAGE}:latest'
+
+                echo "Pushing images to DockerHub..."
+
+                sh '''
+                echo $DOCKERHUB_CREDENTIALS_PSW | \
+                docker login \
+                -u $DOCKERHUB_CREDENTIALS_USR \
+                --password-stdin
+                '''
+
+                sh '''
+                docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+                docker push ${DOCKER_IMAGE}:latest
+
+                docker push ${FRONTEND_IMAGE}:${DOCKER_TAG}
+                docker push ${FRONTEND_IMAGE}:latest
+                '''
             }
         }
 
@@ -54,16 +84,52 @@ pipeline {
             }
         }
 
+        stage('Apply Kubernetes Manifests') {
+            steps {
+
+                echo "Applying Kubernetes manifests..."
+
+                sh '''
+                kubectl apply -f k8s/rbac/
+                kubectl apply -f k8s/deployments/
+                kubectl apply -f k8s/services/
+                kubectl apply -f k8s/hpa/
+                '''
+            }
+        }
+
         stage('Rollout & Self-Healing Verification') {
             steps {
                 echo "Triggering zero-downtime rolling restart..."
-                sh 'kubectl rollout restart deployment fastapi-router toxic-baseline toxic-bert toxic-roberta'
+                kubectl rollout restart deployment \
+                fastapi-router \
+                frontend \
+                toxic-baseline \
+                toxic-bert \
+                toxic-roberta
                 
                 echo "Waiting for pods to stabilize..."
                 sh 'kubectl rollout status deployment/fastapi-router --timeout=120s'
+                sh 'kubectl rollout status deployment/frontend --timeout=120s'
                 sh 'kubectl rollout status deployment/toxic-baseline --timeout=120s'
                 sh 'kubectl rollout status deployment/toxic-bert --timeout=120s'
                 sh 'kubectl rollout status deployment/toxic-roberta --timeout=120s'
+            }
+        }
+
+        stage('Cluster Health Check') {
+            steps {
+
+                echo "Checking cluster health..."
+
+                sh '''
+                kubectl get pods
+
+                if kubectl get pods | grep -E "CrashLoopBackOff|OOMKilled|Error"; then
+                    echo "Cluster unhealthy!"
+                    exit 1
+                fi
+                '''
             }
         }
 
