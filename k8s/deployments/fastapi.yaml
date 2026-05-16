@@ -14,8 +14,6 @@ spec:
         app: fastapi-router
     spec:
       serviceAccountName: telemetry-service-account
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
       - name: fastapi-router
         image: atharva0300/fastapi-router:latest
@@ -66,8 +64,6 @@ spec:
         app: toxic-baseline
     spec:
       serviceAccountName: telemetry-service-account
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
       - name: toxic-baseline
         image: atharva0300/fastapi-router:latest
@@ -120,8 +116,6 @@ spec:
         app: toxic-bert
     spec:
       serviceAccountName: telemetry-service-account
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
       - name: toxic-bert
         image: atharva0300/fastapi-router:latest
@@ -174,8 +168,6 @@ spec:
         app: toxic-roberta
     spec:
       serviceAccountName: telemetry-service-account
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
       - name: toxic-roberta
         image: atharva0300/fastapi-router:latest
