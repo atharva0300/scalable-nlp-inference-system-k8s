@@ -4,57 +4,36 @@ import httpx
 import pandas as pd
 import time
 import json
-import subprocess
-import re
+import requests
 from datetime import datetime
 
 st.set_page_config(page_title="Distributed MLOps Platform", layout="wide")
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://fastapi-router-service:8000"
+TELEMETRY_URL = "http://fastapi-router-service:8000"
+
+def get_cluster_telemetry():
+    try:
+        r = requests.get(f"{TELEMETRY_URL}/telemetry/cluster", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_hpa_telemetry():
+    try:
+        r = requests.get(f"{TELEMETRY_URL}/telemetry/hpa", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_metrics_telemetry():
+    try:
+        r = requests.get(f"{TELEMETRY_URL}/telemetry/metrics", timeout=5)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 st.title("Scalable NLP Inference System using Kubernetes")
-
-def kubectl(cmd):
-    try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e:
-        return f"Error: {e.output.decode()}"
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-def get_pod_metrics():
-    if 'cached_pod_metrics' not in st.session_state:
-        st.session_state['cached_pod_metrics'] = pd.DataFrame()
-        st.session_state['metrics_health'] = "Warming Up / Unavailable"
-
-    out = kubectl("kubectl top pods --no-headers")
-    data = []
-    
-    # Check for valid metrics output
-    if "error:" not in out.lower() and "Error" not in out and out.strip():
-        for line in out.strip().split('\n'):
-            parts = line.split()
-            if len(parts) >= 3 and parts[1] != "0m": # Simple validation
-                name, cpu, mem = parts[0], parts[1], parts[2]
-                try:
-                    cpu_val = int(re.sub(r'\D', '', cpu))
-                    mem_val = int(re.sub(r'\D', '', mem))
-                    data.append({"Pod": name, "CPU (m)": cpu_val, "Memory (Mi)": mem_val})
-                except:
-                    pass
-                    
-        if data:
-            st.session_state['cached_pod_metrics'] = pd.DataFrame(data)
-            st.session_state['metrics_health'] = "Healthy"
-            return st.session_state['cached_pod_metrics']
-            
-    # Fallback to cache if transient failure
-    if not st.session_state['cached_pod_metrics'].empty:
-        st.session_state['metrics_health'] = "Delayed (Using Cache)"
-        return st.session_state['cached_pod_metrics']
-        
-    st.session_state['metrics_health'] = "Warming Up..."
-    return pd.DataFrame()
 
 
 
@@ -221,61 +200,132 @@ with col1:
             st.markdown("#### Routing Distribution Heatmap")
             st.bar_chart(df["final_model"].value_counts())
 
+            routing_counts = df["final_model"].value_counts()
+
+            st.markdown("#### Adaptive Routing Distribution")
+
+            st.dataframe(
+                pd.DataFrame({
+                    "model": routing_counts.index,
+                    "requests": routing_counts.values
+                })
+            )
+
             st.markdown("#### Latency Curve vs Concurrency")
-            st.line_chart(df["latency"])
+            latency_df = df[["timestamp", "latency"]].copy()
+            latency_df = latency_df.set_index("timestamp")
+
+            st.line_chart(latency_df)
 
 with col2:
     st.markdown("### Infrastructure Status")
-    
-    # Scale Status Logic
-    hpa_out = kubectl("kubectl get hpa")
-    pods_out = kubectl('kubectl get pods -l "app in (fastapi-router, toxic-baseline, toxic-bert, toxic-roberta)"')
-    pod_count = pods_out.count("Running")
-    
-    status_label = "STABLE"
-    recent_events = kubectl('kubectl get events --field-selector involvedObject.kind=HorizontalPodAutoscaler')
-    if "SuccessfulRescale" in recent_events and "New size:" in recent_events:
-        if "scale down" in recent_events.lower():
-            status_label = "SCALING DOWN (Cooldown)"
-        else:
-            status_label = "SCALING UP (Load Spiked)"
-            
-    st.markdown(f"#### Cluster State: **{status_label}**")
-    st.caption(f"Total Active Pods: {pod_count}")
-    
-    if st.button("Refresh Telemetry"):
-        pass
+
+    cluster_data = get_cluster_telemetry()
+    hpa_data = get_hpa_telemetry()
+    metrics_data = get_metrics_telemetry()
+
+    if "error" not in cluster_data:
+
+        st.markdown(
+            f"#### Cluster State: **{cluster_data.get('cluster_state')}**"
+        )
+
+        st.caption(
+            f"Total Active Pods: {cluster_data.get('total_active_pods')}"
+        )
+
+        pods = cluster_data.get("pods", [])
+
+        if pods:
+
+            for pod in pods:
+
+                status = pod.get("status", "Unknown")
+                st.markdown(
+                    f"""
+                    ### {pod.get('name')}
+
+                    - Namespace: `{pod.get('namespace')}`
+                    - Status: `{status}`
+                    """
+                )
+
+    else:
+        st.error(cluster_data["error"])
+
+    st.markdown("---")
+
+    st.markdown("#### HPA Status")
+
+    if "error" not in hpa_data:
+
+        hpa_df = pd.DataFrame(hpa_data.get("hpas", []))
+
+        if not hpa_df.empty:
+            st.dataframe(hpa_df)
+
+    else:
+        st.error(hpa_data["error"])
+
+    st.markdown("---")
+
+    st.markdown("#### Live Prometheus Metrics")
+
+    if "error" not in metrics_data:
+
+        cpu_results = (
+            metrics_data
+            .get("cpu", {})
+            .get("data", {})
+            .get("result", [])
+        )
+
+        mem_results = (
+            metrics_data
+            .get("memory", {})
+            .get("data", {})
+            .get("result", [])
+        )
+
+        col_cpu, col_mem = st.columns(2)
+
+        with col_cpu:
+            st.subheader("CPU Usage")
+
+            if cpu_results:
+                cpu_df = pd.DataFrame([
+                    {
+                        "pod": item["metric"].get("pod", "unknown"),
+                        "value": round(float(item["value"][1]), 4)
+                    }
+                    for item in cpu_results
+                ])
+
+                st.bar_chart(cpu_df.set_index("pod"))
+
+            else:
+                st.warning("No CPU metrics available yet.")
+
+        with col_mem:
+            st.subheader("Memory Usage")
+
+            if mem_results:
+                mem_df = pd.DataFrame([
+                    {
+                        "pod": item["metric"].get("pod", "unknown"),
+                        "value_mb": round(float(item["value"][1]) / 1024 / 1024, 2)
+                    }
+                    for item in mem_results
+                ])
+
+                st.bar_chart(mem_df.set_index("pod"))
+
+            else:
+                st.warning("No memory metrics available yet.")
+
+    else:
+        st.error(metrics_data["error"])
+
         
-    try:
-        r = httpx.get(f"{BASE_URL}/routing-stats", timeout=2.0)
-        data = r.json()
-        st.info(f"Active Cluster Mode: **{data.get('mode', 'unknown').upper()}**")
-        stats = data.get("stats", {})
-        
-        for m, s in stats.items():
-            st.metric(
-                f"Score ({m})",
-                s.get("routing_score", 0)
-            )
-            st.caption(f"EWMA: {s.get('ewma_latency')}s | Failures: {s.get('failures')} | Timeouts: {s.get('timeouts')}")
-            st.markdown("---")
-    except Exception as e:
-        st.warning(f"Telemetry Error: {e}")
-
-    st.markdown("#### CPU / Memory Summary")
-    metrics_df = get_pod_metrics()
-    st.caption(f"Metrics Health: **{st.session_state.get('metrics_health', 'Unknown')}**")
-    st.caption("Metrics are collected from Kubernetes metrics-server. Temporary delays may occur during pod startup or autoscaling stabilization.")
-    if not metrics_df.empty:
-        st.dataframe(metrics_df, height=200)
-
-    st.markdown("#### HPA Status Overview")
-    st.code(hpa_out)
-    
-    st.markdown("#### Active Replicas")
-    st.code(pods_out)
-
-        
-
     st.markdown("### Architecture Guide: K8s vs Router")
     st.info("**1. Adaptive Routing (Model Selection)**: The FastAPI Router dynamically selects which *Model Service* to query (e.g. `toxic-baseline`) based on EWMA latency, Hysteresis, and Queue Depth.\n\n**2. Kubernetes Load Balancing (Pod Selection)**: Once the Router mathematically selects the optimal Model, the underlying *Kubernetes Service* abstraction natively distributes that request across the underlying *Pod Replicas* using connection-level Load Balancing.")
