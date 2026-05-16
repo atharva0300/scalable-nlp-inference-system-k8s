@@ -11,11 +11,11 @@
     - name: Apply deployments
       command: kubectl apply -f ../k8s/deployments/
 
-    - name: Apply services
-      command: kubectl apply -f ../k8s/services/
-
-    - name: Apply autoscaling
+    - name: Apply HPA
       command: kubectl apply -f ../k8s/hpa/
+
+    - name: Apply secrets
+      command: kubectl apply -f ../k8s/secrets/
 
     - name: Restart deployments
       command: >

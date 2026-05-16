@@ -54,20 +54,6 @@ pipeline {
             }
         }
 
-        stage('Deploy to Kubernetes') {
-            steps {
-                echo "Applying Kubernetes manifests via kubectl..."
-                
-                // Securely apply secrets
-                sh 'kubectl apply -f k8s/secrets/' || true
-                
-                // Deploy infrastructure
-                sh 'kubectl apply -f k8s/deployments/'
-                sh 'kubectl apply -f k8s/services/'
-                sh 'kubectl apply -f k8s/hpa/'
-            }
-        }
-
         stage('Rollout & Self-Healing Verification') {
             steps {
                 echo "Triggering zero-downtime rolling restart..."
