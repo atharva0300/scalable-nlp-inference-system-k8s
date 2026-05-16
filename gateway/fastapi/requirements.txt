@@ -5,3 +5,5 @@ transformers==4.35.2
 torch
 prometheus-client==0.17.1
 prometheus-fastapi-instrumentator==5.11.2
+kubernetes
+prometheus-api-client

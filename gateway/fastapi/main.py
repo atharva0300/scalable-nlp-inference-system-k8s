@@ -12,6 +12,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import pipeline
 from prometheus_fastapi_instrumentator import Instrumentator
+from kubernetes import client, config
+from fastapi import FastAPI
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nlp-api")
@@ -24,6 +27,17 @@ POD_NAME = os.environ.get("HOSTNAME", "unknown-pod")
 
 app = FastAPI(title=f"Distributed Research Platform - {ROLE}")
 Instrumentator().instrument(app).expose(app)
+# Kubernetes + Prometheus clients
+try:
+    config.load_incluster_config()
+except:
+    config.load_kube_config()
+
+k8s_v1 = client.CoreV1Api()
+k8s_apps = client.AppsV1Api()
+k8s_autoscaling = client.AutoscalingV2Api()
+
+PROMETHEUS_URL = "http://prometheus-service:9090"
 
 class ToxicityRequest(BaseModel):
     text: str
@@ -313,6 +327,97 @@ if ROLE == "router":
             }
         return {"mode": ROUTING_MODE, "stats": payload, "last_switch_time": last_switch_time, "last_selected_model": last_selected_model}
 
+@app.get("/telemetry/cluster")
+async def cluster_telemetry():
+    try:
+        pods = k8s_v1.list_pod_for_all_namespaces().items
+
+        running_pods = [
+            p for p in pods
+            if p.status.phase == "Running"
+        ]
+
+        deployments = k8s_apps.list_deployment_for_all_namespaces().items
+
+        return {
+            "cluster_state": "STABLE",
+            "total_active_pods": len(running_pods),
+            "total_deployments": len(deployments),
+            "pods": [
+                {
+                    "name": p.metadata.name,
+                    "namespace": p.metadata.namespace,
+                    "status": p.status.phase
+                }
+                for p in running_pods
+            ]
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
+
+@app.get("/telemetry/hpa")
+async def hpa_telemetry():
+
+    try:
+        hpas = k8s_autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces().items
+
+        return {
+            "hpas": [
+                {
+                    "name": h.metadata.name,
+                    "namespace": h.metadata.namespace,
+                    "min_replicas": h.spec.min_replicas,
+                    "max_replicas": h.spec.max_replicas,
+                    "current_replicas": h.status.current_replicas
+                }
+                for h in hpas
+            ]
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
+
+@app.get("/telemetry/metrics")
+async def metrics_telemetry():
+
+    try:
+
+        cpu_query = 'rate(http_request_duration_seconds_count[1m])'
+        mem_query = 'process_resident_memory_bytes'
+
+        cpu_res = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": cpu_query},
+            timeout=5
+        ).json()
+
+        mem_res = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": mem_query},
+            timeout=5
+        ).json()
+
+        return {
+            "cpu": cpu_res,
+            "memory": mem_res
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+    
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "pod": POD_NAME}
+    return {
+        "status": "healthy",
+        "pod": POD_NAME
+    }
