@@ -48,8 +48,6 @@ spec:
       labels:
         app: prometheus
     spec:
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
         - name: prometheus
           image: prom/prometheus:latest
