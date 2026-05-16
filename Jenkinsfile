@@ -101,12 +101,7 @@ pipeline {
         stage('Rollout & Self-Healing Verification') {
             steps {
                 echo "Triggering zero-downtime rolling restart..."
-                kubectl rollout restart deployment \
-                fastapi-router \
-                frontend \
-                toxic-baseline \
-                toxic-bert \
-                toxic-roberta
+                kubectl rollout restart deployment fastapi-router frontend toxic-baseline toxic-bert toxic-roberta
                 
                 echo "Waiting for pods to stabilize..."
                 sh 'kubectl rollout status deployment/fastapi-router --timeout=120s'
