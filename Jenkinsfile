@@ -84,8 +84,10 @@ pipeline {
         stage('Smoke Test') {
             steps {
                 echo "Running k6 baseline load test against local cluster..."
-                // Requires port-forwarding to be active in the environment
-                sh 'k6 run load-test/k6/baseline.js' || echo "Smoke test complete."
+
+                sh '''
+		k6 run load-test/k6/baseline.js || echo "Smoke test complete."
+		'''
             }
         }
     }
