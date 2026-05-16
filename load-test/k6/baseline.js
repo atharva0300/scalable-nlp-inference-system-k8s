@@ -23,7 +23,7 @@ const params = {
 
 export default function () {
     // Port forward URL
-    const url = 'http://127.0.0.1:8000/toxicity';
+    const url = 'http://host.docker.internal:8000/toxicity';
     
     // K6 inherently reuses HTTP connections (Keep-Alive) unless told otherwise. 
     // This allows realistic sustained pressure testing.
