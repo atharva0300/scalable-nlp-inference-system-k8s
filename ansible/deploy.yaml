@@ -8,8 +8,14 @@
     - name: Verify kubectl access
       command: kubectl get nodes
 
-    - name: Apply Kubernetes manifests
-      command: kubectl apply -f k8s/
+    - name: Apply deployments
+      command: kubectl apply -f ../k8s/deployments/
+
+    - name: Apply services
+      command: kubectl apply -f ../k8s/services/
+
+    - name: Apply autoscaling
+      command: kubectl apply -f ../k8s/hpa/
 
     - name: Restart deployments
       command: >
