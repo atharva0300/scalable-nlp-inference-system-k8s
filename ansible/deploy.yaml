@@ -25,5 +25,8 @@
         toxic-bert
         toxic-roberta
 
+    - name: Apply services
+      command: kubectl apply -f ../k8s/services/
+
     - name: Wait for router rollout
       command: kubectl rollout status deployment/fastapi-router --timeout=120s
