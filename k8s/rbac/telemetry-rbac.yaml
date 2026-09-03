@@ -7,10 +7,11 @@ metadata:
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 
 metadata:
   name: telemetry-role
+  namespace: default
 
 rules:
   - apiGroups: [""]
@@ -43,10 +44,11 @@ rules:
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 
 metadata:
   name: telemetry-rolebinding
+  namespace: default
 
 subjects:
   - kind: ServiceAccount
@@ -54,6 +56,6 @@ subjects:
     namespace: default
 
 roleRef:
-  kind: ClusterRole
+  kind: Role
   name: telemetry-role
   apiGroup: rbac.authorization.k8s.io

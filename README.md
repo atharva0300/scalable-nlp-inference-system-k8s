@@ -31,6 +31,31 @@ This project solves this by introducing a **Latency-Aware Adaptive Routing Engin
 
 ---
 
+## 🛠 v2.0 Architectural Overhaul (Recent Stabilization Updates)
+
+The system has undergone a major production-grade stabilization refactor to resolve structural bottlenecks, race conditions, and infrastructure blind spots:
+
+1. **High-Concurrency Thread Synchronization**: 
+   * Global state variables inside the FastAPI Gateway (e.g., `queue_depth`, `ewma_latency`) are now strictly synchronized using `asyncio.Lock()` to eliminate race conditions during high-volume `k6` benchmark spikes.
+   * Increased the `anyio` thread limiter to 100 to prevent artificial HTTP bottlenecks.
+
+2. **Aggressive Circuit Breaker Evolution**:
+   * Previously, the routing algorithm assigned a score of `9999.0` to failing nodes, which inadvertently caused traffic to eventually route to dead pods during massive congestion.
+   * The circuit breaker now strictly returns `float('inf')` during open states, forcing a `503` fail-fast behavior and zero-downtime rerouting.
+
+3. **Infrastructure Observability & cAdvisor Integration**:
+   * Replaced pseudo-CPU queries with native Kubernetes hardware metrics.
+   * Upgraded the `Prometheus` deployment by integrating a strict `ClusterRole` and scraping the `kubelet/cadvisor` proxy endpoints, successfully exposing live container `CPU` and `Memory` byte metrics directly to the Streamlit UI.
+
+4. **Zero-Downtime Model Bootstrapping**:
+   * Upgraded the Kubernetes ML worker manifests (`fastapi.yaml`) to utilize `startupProbe` alongside `readinessProbe`. This ensures gigabyte-sized HuggingFace transformer models have infinite time to download into memory upon boot without being prematurely terminated by rigid readiness checks.
+
+5. **RBAC Least Privilege Hardening**:
+   * The Gateway's Kubernetes telemetry API polling was restricted to the `default` namespace using scoped `Role` and `RoleBinding` objects, entirely stripping away dangerous cluster-wide privileges.
+   * `imagePullPolicy` was strictly configured to support localized Docker image builds inside Minikube to prevent pulling outdated, non-functional code from public registries.
+
+---
+
 ## 🏛 System Architecture
 
 ![High-Level Architecture](diagrams/1_High_Level_Architecture.png)
@@ -62,10 +87,52 @@ The repository follows standard cloud-native structure guidelines:
 
 ## 🚀 Getting Started
 
-To ensure a seamless setup, we have modularized the documentation. Please follow the guides in order:
+### Quick Start
+To launch the system immediately using Minikube and Streamlit, run the following commands:
+
+1. **Start Local Cluster**:
+```bash
+minikube start
+```
+
+2. **Build the Local Docker Image** (Inside Minikube):
+Since we've made custom changes to the Python backend, we need to build it into the cluster's local registry so the pods run our new code instead of the public Docker Hub version.
+```bash
+eval $(minikube docker-env)
+docker build -t my-fastapi-router:latest gateway/fastapi/
+```
+
+3. **Deploy Kubernetes Infrastructure**:
+```bash
+kubectl apply -f k8s/secrets/
+kubectl apply -f k8s/rbac/
+kubectl apply -f k8s/deployments/
+kubectl apply -f k8s/services/
+kubectl apply -f k8s/hpa/
+```
+Wait for all pods to show `Running`: `kubectl get pods -w`
+
+3. **Expose the Gateway**:
+Open a separate terminal and port-forward the API router:
+```bash
+kubectl port-forward svc/fastapi-router-service 8000:8000
+```
+
+4. **Launch the Dashboard**:
+Open another terminal, create a virtual environment, install the frontend dependencies, and boot the MLOps Streamlit interface:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r frontend/requirements.txt
+streamlit run frontend/app.py
+```
+This will open the benchmarking dashboard at `http://localhost:8501`.
+
+### Detailed Documentation
+To ensure a seamless setup, we have modularized the extensive documentation. Please follow the guides in order for deep-dives into Ansible, Jenkins, and Architecture:
 
 1. **[Installation Guide](docs/INSTALLATION.md)**: System requirements, dependencies, and environment setup.
-2. **[Running the Project](docs/RUNNING_THE_PROJECT.md)**: Step-by-step execution to spin up the cluster and access the UI.
+2. **[Running the Project](docs/RUNNING_THE_PROJECT.md)**: Full step-by-step execution to spin up the cluster and access the UI.
 3. **[Ansible Deployment Guide](docs/ANSIBLE_GUIDE.md)**: How to automate infrastructure provisioning.
 4. **[Jenkins CI/CD Guide](docs/JENKINS_GUIDE.md)**: Setting up continuous integration and automated rollouts.
 5. **[Tech Stack Documentation](docs/TECH_STACK.md)**: Deep dive into why each technology was chosen.

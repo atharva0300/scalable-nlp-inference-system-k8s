@@ -7,10 +7,13 @@ import json
 import requests
 from datetime import datetime
 
+import os
+
 st.set_page_config(page_title="Distributed MLOps Platform", layout="wide")
 
-BASE_URL = "http://fastapi-router-service:8000"
-TELEMETRY_URL = "http://fastapi-router-service:8000"
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
+BASE_URL = API_URL
+TELEMETRY_URL = API_URL
 
 def get_cluster_telemetry():
     try:
@@ -75,7 +78,7 @@ async def send_one(client, text, sem):
 async def send_batch(text, total, conc):
     sem = asyncio.Semaphore(conc)
     transport = httpx.AsyncHTTPTransport(retries=1)
-    async with httpx.AsyncClient(transport=transport, limits=httpx.Limits(keepalive_expiry=0, max_keepalive_connections=0)) as client:
+    async with httpx.AsyncClient(transport=transport, limits=httpx.Limits(max_keepalive_connections=conc, max_connections=conc)) as client:
         tasks = [send_one(client, text, sem) for _ in range(total)]
         return await asyncio.gather(*tasks)
 
@@ -111,23 +114,25 @@ with col1:
     if run_single_btn:
         st.markdown("### Single Query Inspection")
         with st.spinner("Analyzing..."):
-            async def wrap_send_one():
-                sem = asyncio.Semaphore(1)
-                async with httpx.AsyncClient() as client:
-                    return await send_one(client, text_input, sem)
             try:
-                try:
-                    res = asyncio.run(wrap_send_one())
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    res = loop.run_until_complete(wrap_send_one())
+                start = time.time()
+                r = requests.post(f"{BASE_URL}/toxicity", json={"text": text_input, "model": "auto"}, timeout=30.0)
+                res = r.json()
+                latency = round(time.time() - start, 3)
                 
                 if "error" in res and res["error"]:
                     st.error(f"Error: {res['error']}")
                 else:
+                    res["latency"] = latency
                     st.success(f"**Prediction:** {res['toxicity'].upper()} (Confidence: {res['confidence']})")
-                    st.info(f"**Routing Explanation:** The `{res['routing_mode']}` strategy selected **{res['final_model']}** running on pod `{json.loads(res['replica_path'])[0]}` because of: `{res['routing_reason']}`. Its current EWMA latency was {res['ewma_latency']}s and its queue depth was {res['active_requests']}.")
+                    replica_path = res.get('replica_path', [])
+                    replica_str = replica_path[0] if replica_path else 'unknown'
+                    if isinstance(replica_path, str):
+                        try:
+                            replica_str = json.loads(replica_path)[0]
+                        except:
+                            replica_str = replica_path
+                    st.info(f"**Routing Explanation:** The `{res.get('routing_mode', 'unknown')}` strategy selected **{res.get('final_model', 'unknown')}** running on pod `{replica_str}` because of: `{res.get('routing_reason', 'unknown')}`. Its current EWMA latency was {res.get('ewma_latency', 0)}s and its queue depth was {res.get('active_requests_on_model', 0)}.")
                     st.json(res)
             except Exception as e:
                 st.error(f"Failed: {e}")
@@ -136,16 +141,13 @@ with col1:
         st.markdown(f"### Benchmarking: `{selected_mode.upper()}` Mode")
         with st.spinner(f"Processing {total_requests} requests (Max {concurrency} concurrently)..."):
             try:
-                try:
-                    results = asyncio.run(send_batch(text_input, total_requests, concurrency))
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    results = loop.run_until_complete(send_batch(text_input, total_requests, concurrency))
-            except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 results = loop.run_until_complete(send_batch(text_input, total_requests, concurrency))
+                loop.close()
+            except Exception as e:
+                st.error(f"Failed during benchmark: {e}")
+                results = []
 
         success = [r for r in results if "error" not in r]
         fail = [r for r in results if "error" in r]

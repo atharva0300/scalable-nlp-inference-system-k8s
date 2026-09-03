@@ -84,19 +84,7 @@ pipeline {
             }
         }
 
-        stage('Apply Kubernetes Manifests') {
-            steps {
 
-                echo "Applying Kubernetes manifests..."
-
-                sh '''
-                kubectl apply -f k8s/rbac/
-                kubectl apply -f k8s/deployments/
-                kubectl apply -f k8s/services/
-                kubectl apply -f k8s/hpa/
-                '''
-            }
-        }
 
         stage('Rollout & Self-Healing Verification') {
             steps {
@@ -128,7 +116,7 @@ pipeline {
                 sh '''
                 kubectl get pods
 
-                if kubectl get pods | grep -E "CrashLoopBackOff|OOMKilled|Error"; then
+                if kubectl get pods | awk '{print $3}' | grep -E "^(CrashLoopBackOff|OOMKilled|Error)$"; then
                     echo "Cluster unhealthy!"
                     exit 1
                 fi
@@ -141,7 +129,7 @@ pipeline {
                 echo "Running k6 baseline load test against local cluster..."
 
                 sh '''
-		k6 run load-test/k6/baseline.js || echo "Smoke test complete."
+		k6 run load-test/k6/baseline.js
 		'''
             }
         }

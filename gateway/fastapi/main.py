@@ -56,14 +56,6 @@ def is_toxic_label(label: str) -> bool:
     label = label.lower()
     return label in ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate", "label_1"]
 
-def get_contextual_metadata(text, labels_list):
-    disagreement = len(set(labels_list)) > 1
-    contextual = False
-    if '"' in text or "'" in text:
-        contextual = True
-    if len(text.split()) > 30 and disagreement:
-        contextual = True
-    return {"possible_contextual_usage": contextual, "model_disagreement": disagreement}
 
 if ROLE == "worker":
     logger.info(f"Loading toxicity model {MODEL_ID} into memory...")
@@ -76,7 +68,7 @@ if ROLE == "worker":
     @app.on_event("startup")
     async def startup_event():
         limiter = anyio.to_thread.current_default_thread_limiter()
-        limiter.total_tokens = 2
+        limiter.total_tokens = 100
 
     @app.post("/infer")
     def infer(req: InferRequest):
@@ -117,7 +109,7 @@ if ROLE == "router":
                     self.circuit_open = False
                     self.ewma_latency = 0.5
                 else:
-                    return 9999.0
+                    return float('inf')
                     
             # Decay penalties naturally so they don't permanently inflate the score
             self.timeouts *= 0.95
@@ -132,14 +124,15 @@ if ROLE == "router":
         "roberta": ModelStats()
     }
 
+    router_lock = asyncio.Lock()
+
     async def call_worker(client, model_name, text):
         st = stats[model_name]
 
-        # queue enters
-        st.queue_depth += 1
-
-        st.active_requests += 1
-        st.total_requests += 1
+        async with router_lock:
+            st.queue_depth += 1
+            st.active_requests += 1
+            st.total_requests += 1
 
         start_time = time.time()
 
@@ -149,39 +142,31 @@ if ROLE == "router":
                 json={"text": text},
                 timeout=15.0
             )
-
             r.raise_for_status()
-
             data = r.json()
-
             lat = time.time() - start_time
 
-            st.update_latency(lat)
-
-            st.active_requests -= 1
-
-            # queue exits
-            st.queue_depth = max(0, st.queue_depth - 1)
+            async with router_lock:
+                st.update_latency(lat)
+                st.active_requests -= 1
+                st.queue_depth = max(0, st.queue_depth - 1)
 
             return data
 
         except httpx.TimeoutException:
-            st.timeouts += 1
-
-            st.active_requests -= 1
-            st.queue_depth = max(0, st.queue_depth - 1)
-
-            st.circuit_open = True
-            st.circuit_open_time = time.time()
-
+            async with router_lock:
+                st.timeouts += 1
+                st.active_requests -= 1
+                st.queue_depth = max(0, st.queue_depth - 1)
+                st.circuit_open = True
+                st.circuit_open_time = time.time()
             raise Exception("Timeout")
 
         except Exception as e:
-            st.failures += 1
-
-            st.active_requests -= 1
-            st.queue_depth = max(0, st.queue_depth - 1)
-
+            async with router_lock:
+                st.failures += 1
+                st.active_requests -= 1
+                st.queue_depth = max(0, st.queue_depth - 1)
             raise Exception(str(e))
 
     def log_request(latency, req_id, req_text, toxicity, confidence, model_name, path_taken, reason, score, queue_depth, mode, ewma):
@@ -227,36 +212,40 @@ if ROLE == "router":
                 
                 if req.model == "auto":
                     if ROUTING_MODE == "adaptive":
-                        scores = {m: stats[m].get_score() for m in SERVICES.keys()}
-                        best_model = min(scores, key=scores.get)
-                        best_score = scores[best_model]
-                        
-                        current_model = last_selected_model
-                        current_score = scores.get(current_model, 9999.0)
-                        
-                        time_since_switch = time.time() - last_switch_time
-                        
-                        if time_since_switch < 3.0:
-                            model_used = current_model
-                            score = current_score
-                            reason = "adaptive_cooldown_active"
-                        else:
-                            if current_model == best_model:
-                                model_used = best_model
-                                score = best_score
-                                reason = "adaptive_best_unchanged"
+                        async with router_lock:
+                            scores = {m: stats[m].get_score() for m in SERVICES.keys()}
+                            best_model = min(scores, key=scores.get)
+                            best_score = scores[best_model]
+                            
+                            if best_score == float('inf'):
+                                raise Exception("All models overloaded or circuit open")
+                            
+                            current_model = last_selected_model
+                            current_score = scores.get(current_model, float('inf'))
+                            
+                            time_since_switch = time.time() - last_switch_time
+                            
+                            if time_since_switch < 3.0:
+                                model_used = current_model if current_score != float('inf') else best_model
+                                score = current_score if current_score != float('inf') else best_score
+                                reason = "adaptive_cooldown_active"
                             else:
-                                diff_ratio = (current_score - best_score) / max(current_score, 0.001)
-                                if diff_ratio > 0.15:
+                                if current_model == best_model:
                                     model_used = best_model
                                     score = best_score
-                                    reason = "adaptive_hysteresis_switch"
-                                    last_selected_model = model_used
-                                    last_switch_time = time.time()
+                                    reason = "adaptive_best_unchanged"
                                 else:
-                                    model_used = current_model
-                                    score = current_score
-                                    reason = "adaptive_hysteresis_keep"
+                                    diff_ratio = (current_score - best_score) / max(current_score, 0.001) if current_score != float('inf') else 1.0
+                                    if diff_ratio > 0.15:
+                                        model_used = best_model
+                                        score = best_score
+                                        reason = "adaptive_hysteresis_switch"
+                                        last_selected_model = model_used
+                                        last_switch_time = time.time()
+                                    else:
+                                        model_used = current_model
+                                        score = current_score
+                                        reason = "adaptive_hysteresis_keep"
                     else:
                         rand_val = random.random()
                         if rand_val < 0.5:
@@ -275,8 +264,8 @@ if ROLE == "router":
                     except Exception as e:
                         if req.model == "auto":
                             scores = {m: stats[m].get_score() for m in SERVICES.keys() if m != model_used}
-                            if scores:
-                                fallback_model = min(scores, key=scores.get)
+                            fallback_model = min(scores, key=scores.get) if scores else None
+                            if fallback_model and scores[fallback_model] != float('inf'):
                                 reason = f"fallback_from_{model_used}"
                                 model_used = fallback_model
                                 res = await call_worker(client, model_used, req.text)
@@ -287,7 +276,7 @@ if ROLE == "router":
 
                     lat = round(time.time() - start, 4)
                     tox_level = "high" if res["is_toxic"] else "low"
-                    ctx = get_contextual_metadata(req.text, [res["is_toxic"]])
+                    
                     
                     log_request(lat, req_id, req.text, tox_level, res["confidence"], model_used, [res["replica_id"]], reason, score, stats[model_used].active_requests, ROUTING_MODE, stats[model_used].ewma_latency)
                     
@@ -330,14 +319,14 @@ if ROLE == "router":
 @app.get("/telemetry/cluster")
 async def cluster_telemetry():
     try:
-        pods = k8s_v1.list_pod_for_all_namespaces().items
+        pods = k8s_v1.list_namespaced_pod("default").items
 
         running_pods = [
             p for p in pods
             if p.status.phase == "Running"
         ]
 
-        deployments = k8s_apps.list_deployment_for_all_namespaces().items
+        deployments = k8s_apps.list_namespaced_deployment("default").items
 
         return {
             "cluster_state": "STABLE",
@@ -363,7 +352,7 @@ async def cluster_telemetry():
 async def hpa_telemetry():
 
     try:
-        hpas = k8s_autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces().items
+        hpas = k8s_autoscaling.list_namespaced_horizontal_pod_autoscaler("default").items
 
         return {
             "hpas": [
@@ -389,8 +378,8 @@ async def metrics_telemetry():
 
     try:
 
-        cpu_query = 'rate(http_request_duration_seconds_count[1m])'
-        mem_query = 'process_resident_memory_bytes'
+        cpu_query = 'sum(rate(container_cpu_usage_seconds_total{namespace="default"}[1m])) by (pod)'
+        mem_query = 'sum(container_memory_usage_bytes{namespace="default"}) by (pod)'
 
         cpu_res = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query",

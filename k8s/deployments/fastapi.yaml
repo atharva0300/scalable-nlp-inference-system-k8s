@@ -16,8 +16,8 @@ spec:
       serviceAccountName: telemetry-service-account
       containers:
       - name: fastapi-router
-        image: atharva0300/fastapi-router:latest
-        imagePullPolicy: Always
+        image: my-fastapi-router:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
         env:
@@ -37,17 +37,6 @@ spec:
             cpu: "500m"
             memory: "512Mi"
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: fastapi-router-service
-spec:
-  selector:
-    app: fastapi-router
-  ports:
-  - port: 8000
-    targetPort: 8000
----
 # TOXIC BASELINE WORKER
 apiVersion: apps/v1
 kind: Deployment
@@ -66,8 +55,8 @@ spec:
       serviceAccountName: telemetry-service-account
       containers:
       - name: toxic-baseline
-        image: atharva0300/fastapi-router:latest
-        imagePullPolicy: Always
+        image: my-fastapi-router:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
         env:
@@ -75,12 +64,17 @@ spec:
           value: "worker"
         - name: MODEL_ID
           value: "martin-ha/toxic-comment-model"
-        readinessProbe:
+        startupProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 10
           periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 2
         resources:
           requests:
             cpu: "200m"
@@ -118,8 +112,8 @@ spec:
       serviceAccountName: telemetry-service-account
       containers:
       - name: toxic-bert
-        image: atharva0300/fastapi-router:latest
-        imagePullPolicy: Always
+        image: my-fastapi-router:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
         env:
@@ -127,12 +121,17 @@ spec:
           value: "worker"
         - name: MODEL_ID
           value: "unitary/toxic-bert"
-        readinessProbe:
+        startupProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 15
           periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 2
         resources:
           requests:
             cpu: "300m"
@@ -170,8 +169,8 @@ spec:
       serviceAccountName: telemetry-service-account
       containers:
       - name: toxic-roberta
-        image: atharva0300/fastapi-router:latest
-        imagePullPolicy: Always
+        image: my-fastapi-router:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
         env:
@@ -179,12 +178,17 @@ spec:
           value: "worker"
         - name: MODEL_ID
           value: "unitary/unbiased-toxic-roberta"
-        readinessProbe:
+        startupProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 20
           periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 2
         resources:
           requests:
             cpu: "300m"
